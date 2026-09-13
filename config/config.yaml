@@ -1,0 +1,9 @@
+cdp_url: "http://localhost:9222"
+cdp_port: 9222
+default_max_loops: 5
+timeout_seconds: 240
+text_stability_seconds: 2.5
+reconnect_attempts: 3
+reconnect_delay_seconds: 2.0
+browser_path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+dedicated_profile_dir: "browser_profile"

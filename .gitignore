@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+browser_profile/
+storage/logs/*.log
+storage/sessions/*.json
+.pytest_cache/

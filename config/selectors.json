@@ -1,0 +1,17 @@
+{
+  "perplexity": {
+    "url_match": "perplexity.ai",
+    "input_textarea": "textarea[placeholder*='Ask'], textarea",
+    "send_button": "button[aria-label*='Submit'], button:has(svg.lucide-arrow-right)",
+    "stop_button": "button:has-text('Stop')",
+    "last_response": "div[data-testid='answer-content'], div.prose:last-of-type"
+  },
+  "chatgpt": {
+    "url_match": "chatgpt.com",
+    "prompt_textarea": "#prompt-textarea, div[contenteditable='true']",
+    "send_button": "button[data-testid='send-button']",
+    "stop_button": "button[data-testid='stop-button']",
+    "last_response": "div[data-message-author-role='assistant']:last-of-type",
+    "tool_running_indicator": "div[data-testid*='tool-call-running'], div.animate-spin"
+  }
+}
