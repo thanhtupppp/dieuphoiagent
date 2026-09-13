@@ -14,6 +14,8 @@ from core.checkpoint_manager import (
 )
 from core.cdp_connector import CDPConnector
 from core.config_loader import AppConfig, SelectorsConfig
+from core.providers.base import AgentProvider, AgentRequest, AgentRole
+from core.providers.cdp_provider import CdpProvider
 from core.stream_detector import StreamDetector
 from core.tag_protocol import AgentStatus, TagParseResult, parse_agent_output
 
@@ -38,7 +40,12 @@ class FSMState(str, Enum):
 
 
 class OrchestratorFSM:
-    def __init__(self, config: AppConfig, selectors: SelectorsConfig):
+    def __init__(
+        self,
+        config: AppConfig,
+        selectors: SelectorsConfig,
+        provider: Optional[AgentProvider] = None,
+    ):
         self.config = config
         self.selectors = selectors
         self.state: FSMState = FSMState.IDLE
@@ -46,8 +53,15 @@ class OrchestratorFSM:
         self.max_loops: int = config.max_loops
         self.auto_mode: bool = True
         self.is_running: bool = False
-        self.connector = CDPConnector(config, selectors)
-        self.detector = StreamDetector(config, selectors)
+        self.provider: AgentProvider = (
+            provider if provider is not None else CdpProvider(config, selectors)
+        )
+        if isinstance(self.provider, CdpProvider):
+            self.connector = self.provider.connector
+            self.detector = self.provider.detector
+        else:
+            self.connector = CDPConnector(config, selectors)
+            self.detector = StreamDetector(config, selectors)
         self.on_state_change: Optional[Callable[[FSMState], None]] = None
         self.on_log: Optional[Callable[[str, str], None]] = None
         self.on_approval_required: Optional[Callable[[str, TagParseResult], None]] = None
@@ -75,19 +89,17 @@ class OrchestratorFSM:
             self.on_log(source, message)
 
     async def ensure_cdp(self) -> bool:
-        connected = await self.connector.connect()
-        if not connected:
+        try:
+            healthy = await self.provider.health_check()
+            if not healthy:
+                self.set_state(FSMState.CDP_ERROR)
+                self.log("system", "Không tìm thấy đủ tab Perplexity và ChatGPT.")
+                return False
+            return True
+        except Exception as e:
             self.set_state(FSMState.CDP_ERROR)
-            self.log("system", "Không thể kết nối tới trình duyệt qua cổng 9222!")
+            self.log("system", f"Lỗi kết nối CDP: {e}")
             return False
-        p_tab, c_tab = await self.connector.find_tabs()
-        if not p_tab or not c_tab:
-            self.set_state(FSMState.CDP_ERROR)
-            self.log("system", "Không tìm thấy đủ tab Perplexity và ChatGPT.")
-            return False
-        self.connector.perplexity_tab = p_tab
-        self.connector.chatgpt_tab = c_tab
-        return True
 
     async def start_task(
         self,
@@ -168,9 +180,15 @@ class OrchestratorFSM:
         self.log("system", "Bắt đầu tự động quét và đồng bộ trạng thái từ các tab trình duyệt...")
         if not await self.ensure_cdp():
             return
+        p_tab = getattr(self.connector, "perplexity_tab", None)
+        c_tab = getattr(self.connector, "chatgpt_tab", None)
+        if not p_tab or not c_tab:
+            self.set_state(FSMState.CDP_ERROR)
+            self.log("system", "Không tìm thấy đủ tab Perplexity và ChatGPT để đồng bộ.")
+            return
         cp = await reconcile_from_tabs(
-            p_tab=self.connector.perplexity_tab,
-            c_tab=self.connector.chatgpt_tab,
+            p_tab=p_tab,
+            c_tab=c_tab,
             repo=repo,
             branch=branch,
             goal=goal,
@@ -210,18 +228,16 @@ class OrchestratorFSM:
                     self.last_attempted_agent = "perplexity"
                     self.last_attempted_payload = next_prompt
                     self.log("perplexity", "Gửi yêu cầu phân tích vào Perplexity...")
-                    p_tab = self.connector.perplexity_tab
-                    if p_tab is None:
-                        raise RuntimeError("Tab Perplexity không sẵn sàng!")
-                    await self.detector.send_prompt(
-                        p_tab, next_prompt, "perplexity"
-                    )
                     self.set_state(FSMState.PERPLEXITY_WAITING)
-                    raw_p_resp = await self.detector.wait_for_completion(
-                        p_tab,
-                        "perplexity",
-                        on_progress=lambda msg: self.log("perplexity", msg),
+                    resp = await self.provider.send(
+                        AgentRequest(
+                            role=AgentRole.TECH_LEAD,
+                            system_prompt="",
+                            user_prompt=next_prompt,
+                            on_progress=lambda msg: self.log("perplexity", msg),
+                        )
                     )
+                    raw_p_resp = resp.content
                     self.set_state(FSMState.PERPLEXITY_PARSING)
                     p_result = parse_agent_output(raw_p_resp, source="perplexity")
                     self.log("perplexity", f"Nhận kết quả: {p_result.status.value}")
@@ -271,18 +287,16 @@ class OrchestratorFSM:
                     self.last_attempted_agent = "chatgpt"
                     self.last_attempted_payload = next_prompt
                     self.log("chatgpt", "Chuyển payload sang ChatGPT...")
-                    c_tab = self.connector.chatgpt_tab
-                    if c_tab is None:
-                        raise RuntimeError("Tab ChatGPT không sẵn sàng!")
-                    await self.detector.send_prompt(
-                        c_tab, next_prompt, "chatgpt"
-                    )
                     self.set_state(FSMState.CHATGPT_WAITING)
-                    raw_c_resp = await self.detector.wait_for_completion(
-                        c_tab,
-                        "chatgpt",
-                        on_progress=lambda msg: self.log("chatgpt", msg),
+                    resp = await self.provider.send(
+                        AgentRequest(
+                            role=AgentRole.CORE_DEV,
+                            system_prompt="",
+                            user_prompt=next_prompt,
+                            on_progress=lambda msg: self.log("chatgpt", msg),
+                        )
                     )
+                    raw_c_resp = resp.content
                     self.set_state(FSMState.CHATGPT_PARSING)
                     c_result = parse_agent_output(raw_c_resp, source="chatgpt")
                     self.log("chatgpt", f"Nhận kết quả: {c_result.status.value}")
@@ -416,3 +430,7 @@ class OrchestratorFSM:
                 ensure_ascii=False,
                 indent=2,
             )
+
+    async def close(self) -> None:
+        await self.provider.close()
+
