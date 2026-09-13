@@ -21,7 +21,9 @@ async def test_cdp_provider_ensures_tabs_and_sends_to_tech_lead(provider):
     provider.detector.send_prompt = AsyncMock()
     provider.detector.wait_for_completion = AsyncMock(return_value="[STATUS: READY_FOR_DEV] result")
 
-    progress = lambda message: None
+    def progress(message: str) -> None:
+        pass
+
     response = await provider.send(
         AgentRequest(
             role=AgentRole.TECH_LEAD,
@@ -173,3 +175,41 @@ async def test_cdp_provider_reconnects_after_close(provider):
 # Keep the provider-kind contract visible in this focused test module.
 def test_cdp_provider_kind():
     assert CdpProvider.kind is ProviderKind.CDP
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_cdp_provider_live_health_check():
+    """Live smoke test verifying connection to real Chrome on port 9222 and tab detection."""
+    config = AppConfig()
+    provider = CdpProvider(config)
+    try:
+        is_healthy = await provider.health_check()
+        assert is_healthy is True
+        p_tab, c_tab = await provider._ensure_tabs()
+        assert p_tab is not None
+        assert c_tab is not None
+        assert "perplexity" in (getattr(p_tab, "url", "") or "")
+        assert "chatgpt" in (getattr(c_tab, "url", "") or "") or "openai" in (
+            getattr(c_tab, "url", "") or ""
+        )
+    finally:
+        await provider.close()
+
+
+@pytest.mark.live
+@pytest.mark.asyncio
+async def test_cdp_provider_live_tabs_evaluation():
+    """Live smoke test verifying that both tabs can evaluate basic JavaScript."""
+    config = AppConfig()
+    provider = CdpProvider(config)
+    try:
+        p_tab, c_tab = await provider._ensure_tabs()
+        assert p_tab is not None and c_tab is not None
+        p_eval = await p_tab.evaluate("() => document.location.hostname")
+        c_eval = await c_tab.evaluate("() => document.location.hostname")
+        assert "perplexity" in p_eval
+        assert "chatgpt" in c_eval or "openai" in c_eval
+    finally:
+        await provider.close()
+

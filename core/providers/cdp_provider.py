@@ -1,6 +1,4 @@
 import time
-from typing import Any
-
 from playwright.async_api import Page
 
 from core.cdp_connector import CDPConnector
