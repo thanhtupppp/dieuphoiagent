@@ -31,7 +31,6 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",
     "ruff>=0.6.9",
-    "types-PyYAML>=6.0.12",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -49,6 +48,10 @@ ignore = ["E501", "ASYNC240"]
 python_version = "3.12"
 warn_unused_ignores = true
 check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 markers = [
