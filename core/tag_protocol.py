@@ -100,7 +100,7 @@ def parse_agent_output(text: str, source: str) -> TagParseResult:
         branch_match = re.search(r"\b(ai-agent/[a-zA-Z0-9_\-]+)\b", text)
         if pr_match or sha_match:
             status = AgentStatus.COMMITTED
-            payload = CommitReportPayload(
+            committed_payload = CommitReportPayload(
                 branch=branch_match.group(1) if branch_match else "",
                 commit_sha=sha_match.group(1) if sha_match else "",
                 pr_url=pr_match.group(0) if pr_match else "",
@@ -110,7 +110,7 @@ def parse_agent_output(text: str, source: str) -> TagParseResult:
                 status=status,
                 source=source,
                 raw_text=text,
-                payload=payload,
+                payload=committed_payload,
                 tags=tags,
             )
 
