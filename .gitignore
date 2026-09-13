@@ -4,4 +4,5 @@ __pycache__/
 browser_profile/
 storage/logs/*.log
 storage/sessions/*.json
+storage/checkpoint.json
 .pytest_cache/
