@@ -3,5 +3,13 @@ repos:
     rev: v0.6.9
     hooks:
       - id: ruff
-        args: [--fix]
       - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (core + ui)
+        entry: uv run mypy core ui
+        language: system
+        pass_filenames: false
+        require_serial: true

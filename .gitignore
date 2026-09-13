@@ -7,6 +7,9 @@ storage/sessions/*.json
 storage/checkpoint.json
 .pytest_cache/
 .coverage
+coverage.xml
+htmlcov/
+test-results.xml
 .env
 .env.*
 !.env.example
