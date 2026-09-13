@@ -20,7 +20,7 @@ class StreamDetector:
         el = None
         if hasattr(page, "wait_for_selector"):
             try:
-                el = await page.wait_for_selector(s_input, timeout=15000)
+                el = await page.wait_for_selector(s_input, state="visible", timeout=15000)
             except Exception:
                 el = await page.query_selector(s_input)
         elif hasattr(page, "query_selector"):
@@ -28,9 +28,15 @@ class StreamDetector:
 
         if el:
             if hasattr(el, "click"):
-                await el.click()
+                try:
+                    await el.click(force=True, timeout=5000)
+                except Exception:
+                    pass
             if hasattr(el, "focus"):
-                await el.focus()
+                try:
+                    await el.focus()
+                except Exception:
+                    pass
             await asyncio.sleep(0.3)
 
             # Try keyboard.insert_text first (works for Lexical / ProseMirror contenteditable and textarea)
@@ -43,7 +49,7 @@ class StreamDetector:
         elif hasattr(page, "fill"):
             await page.fill(s_input, text)
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.6)
 
         # Try clicking send button
         submitted = False
@@ -51,7 +57,7 @@ class StreamDetector:
             try:
                 btn = await page.query_selector(s_send)
                 if btn and await btn.is_visible():
-                    await btn.click()
+                    await btn.click(force=True, timeout=5000)
                     submitted = True
             except Exception:
                 pass

@@ -1,17 +1,17 @@
 {
   "perplexity": {
     "url_match": "perplexity.ai",
-    "input_textarea": "#ask-input, div[contenteditable='true'], textarea",
-    "send_button": "button[aria-label='Submit'], button[aria-label*='Submit'], button:has(svg.lucide-arrow-right)",
-    "stop_button": "button:has-text('Stop')",
+    "input_textarea": "#ask-input:visible, div[contenteditable='true']:visible, textarea:visible",
+    "send_button": "button[aria-label='Submit']:visible, button[aria-label*='Submit']:visible, button:has(svg.lucide-arrow-right):visible",
+    "stop_button": "button:has-text('Stop'):visible",
     "last_response": "div[data-testid='answer-content'], div.prose:last-of-type, div.default"
   },
   "chatgpt": {
     "url_match": "chatgpt.com",
-    "prompt_textarea": "#prompt-textarea, div[contenteditable='true'], textarea",
-    "send_button": "button[data-testid='send-button']",
-    "stop_button": "button[data-testid='stop-button']",
+    "prompt_textarea": "div#prompt-textarea:visible, [contenteditable='true']:visible",
+    "send_button": "button[data-testid='send-button']:visible",
+    "stop_button": "button[data-testid='stop-button']:visible",
     "last_response": "div[data-message-author-role='assistant']:last-of-type",
-    "tool_running_indicator": "div[data-testid*='tool-call-running'], div.animate-spin"
+    "tool_running_indicator": "div[data-testid*='tool-call-running']:visible, div.animate-spin:visible"
   }
 }
