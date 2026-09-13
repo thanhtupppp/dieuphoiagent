@@ -1,4 +1,5 @@
-from typing import Optional, Callable
+from typing import Callable
+
 
 class PreviewModalState:
     def __init__(self):
@@ -13,6 +14,7 @@ class PreviewModalState:
 
     def close_modal(self):
         self.is_visible = False
+
 
 class PreviewModal:
     def __init__(self, on_approve: Callable[[str], None], on_reject: Callable[[], None]):
@@ -30,9 +32,7 @@ class PreviewModal:
             with ui.dialog() as self.dialog, ui.card().classes("w-[700px] max-w-4xl p-6"):
                 self.title_label = ui.label("Duyệt Payload chuyển giao").classes("text-xl font-bold")
                 ui.label("Xem trước và chỉnh sửa nội dung trước khi gửi sang tab tiếp theo:").classes("text-sm text-gray-500 mb-2")
-                
                 self.payload_input = ui.textarea(label="Nội dung gửi").classes("w-full h-64 font-mono text-sm")
-                
                 with ui.row().classes("w-full justify-end mt-4 gap-3"):
                     ui.button("Hủy bỏ bước", color="red", on_click=self._handle_reject).props("flat")
                     ui.button("Duyệt & Gửi tiếp", color="green", on_click=self._handle_approve)
