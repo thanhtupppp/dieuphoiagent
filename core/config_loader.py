@@ -1,8 +1,9 @@
-from pathlib import Path
-from typing import Dict, Any
-import yaml
 import json
+from typing import Dict
+
+import yaml
 from pydantic import BaseModel, Field
+
 
 class AppConfig(BaseModel):
     cdp_url: str = "http://localhost:9222"
@@ -15,14 +16,17 @@ class AppConfig(BaseModel):
     browser_path: str = ""
     dedicated_profile_dir: str = "browser_profile"
 
+
 class SelectorsConfig(BaseModel):
     perplexity: Dict[str, str]
     chatgpt: Dict[str, str]
+
 
 def load_config(path: str = "config/config.yaml") -> AppConfig:
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return AppConfig(**data)
+
 
 def load_selectors(path: str = "config/selectors.json") -> SelectorsConfig:
     with open(path, "r", encoding="utf-8") as f:
