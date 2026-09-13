@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import Optional
+from typing import Optional, Callable
 from playwright.async_api import Page
 from core.config_loader import AppConfig, SelectorsConfig
 
@@ -66,7 +66,7 @@ class StreamDetector:
         if not submitted and hasattr(page, "keyboard"):
             await page.keyboard.press("Enter")
 
-    async def wait_for_completion(self, page: Page, agent_type: str) -> str:
+    async def wait_for_completion(self, page: Page, agent_type: str, on_progress: Optional[Callable[[str], None]] = None) -> str:
         s_cfg = self.selectors.perplexity if agent_type == "perplexity" else self.selectors.chatgpt
         s_stop = s_cfg.get("stop_button")
         s_resp = s_cfg.get("last_response")
@@ -76,12 +76,18 @@ class StreamDetector:
         timeout = self.config.timeout_seconds
         stability_duration = self.config.text_stability_seconds
 
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(2.0)
 
         last_text = ""
         stable_start: Optional[float] = None
+        last_progress_time = start_time
 
         while time.time() - start_time < timeout:
+            now = time.time()
+            elapsed = now - start_time
+            if on_progress and (now - last_progress_time >= 25.0):
+                last_progress_time = now
+                on_progress(f"Đang đợi {agent_type.capitalize()} xử lý và chạy Tool... (đã đợi {int(elapsed)}s / {timeout}s)")
             # 1. Stop button check
             if s_stop and hasattr(page, "is_visible"):
                 try:

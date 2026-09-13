@@ -46,6 +46,13 @@ def build_ui():
                 loop_label = ui.label("5").classes("font-mono font-bold text-indigo-600")
                 loop_slider.bind_value_to(loop_label, "text", forward=lambda v: str(v))
 
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Timeout chờ AI / Tool:").classes("text-sm font-medium text-slate-700")
+                timeout_select = ui.select(
+                    options={300: "5 phút (300s)", 600: "10 phút (600s)", 900: "15 phút (900s)"},
+                    value=600
+                ).classes("w-44")
+
             auto_switch = ui.switch("Chạy tự động (Auto-pilot)", value=True).classes("text-sm text-slate-700 font-medium")
 
             ui.separator().classes("my-1")
@@ -111,7 +118,8 @@ def build_ui():
         branch=branch_input.value,
         goal=goal_input.value,
         max_loops=int(loop_slider.value),
-        auto_mode=auto_switch.value
+        auto_mode=auto_switch.value,
+        timeout_seconds=int(timeout_select.value)
     ))
     pause_btn.on_click(lambda: fsm.pause())
     stop_btn.on_click(lambda: fsm.stop())

@@ -7,7 +7,7 @@ def test_load_config_defaults():
     assert isinstance(config, AppConfig)
     assert config.cdp_port == 9222
     assert config.max_loops == 5
-    assert config.timeout_seconds == 240
+    assert config.timeout_seconds == 600
     assert config.text_stability_seconds == 2.5
 
 def test_load_selectors():

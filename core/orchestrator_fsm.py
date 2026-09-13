@@ -60,12 +60,14 @@ class OrchestratorFSM:
         if self.on_log:
             self.on_log(source, message)
 
-    async def start_task(self, repo: str, branch: str, goal: str, max_loops: int, auto_mode: bool = True):
+    async def start_task(self, repo: str, branch: str, goal: str, max_loops: int, auto_mode: bool = True, timeout_seconds: Optional[int] = None):
         self.current_repo = repo
         self.current_branch = branch
         self.current_goal = goal
         self.max_loops = max_loops
         self.auto_mode = auto_mode
+        if timeout_seconds:
+            self.config.timeout_seconds = timeout_seconds
         self.loop_count = 0
         self.is_running = True
         self.session_events = []
@@ -101,7 +103,11 @@ class OrchestratorFSM:
                 await self.detector.send_prompt(self.connector.perplexity_tab, next_prompt, "perplexity")
 
                 self.set_state(FSMState.PERPLEXITY_WAITING)
-                raw_p_resp = await self.detector.wait_for_completion(self.connector.perplexity_tab, "perplexity")
+                raw_p_resp = await self.detector.wait_for_completion(
+                    self.connector.perplexity_tab,
+                    "perplexity",
+                    on_progress=lambda msg: self.log("perplexity", msg)
+                )
                 
                 self.set_state(FSMState.PERPLEXITY_PARSING)
                 p_result = parse_agent_output(raw_p_resp, source="perplexity")
@@ -136,7 +142,11 @@ class OrchestratorFSM:
                 await self.detector.send_prompt(self.connector.chatgpt_tab, chatgpt_prompt, "chatgpt")
 
                 self.set_state(FSMState.CHATGPT_WAITING)
-                raw_c_resp = await self.detector.wait_for_completion(self.connector.chatgpt_tab, "chatgpt")
+                raw_c_resp = await self.detector.wait_for_completion(
+                    self.connector.chatgpt_tab,
+                    "chatgpt",
+                    on_progress=lambda msg: self.log("chatgpt", msg)
+                )
 
                 self.set_state(FSMState.CHATGPT_PARSING)
                 c_result = parse_agent_output(raw_c_resp, source="chatgpt")

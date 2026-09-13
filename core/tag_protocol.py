@@ -116,10 +116,16 @@ def parse_agent_output(text: str, source: str) -> TagParseResult:
     elif status == AgentStatus.COMPLETED:
         payload = CompletionPayload(summary=tags.get("SUMMARY", text))
     elif status == AgentStatus.COMMITTED:
+        pr_url = tags.get("PR_URL", "")
+        if not pr_url:
+            pr_match = re.search(r"https://github\.com/[^\s]+/pull/\d+", text)
+            if pr_match:
+                pr_url = pr_match.group(0)
+
         payload = CommitReportPayload(
             branch=tags.get("BRANCH", ""),
             commit_sha=tags.get("COMMIT_SHA", ""),
-            pr_url=tags.get("PR_URL", ""),
+            pr_url=pr_url,
             summary_changes=tags.get("SUMMARY_CHANGES", "")
         )
     elif status == AgentStatus.ERROR:
