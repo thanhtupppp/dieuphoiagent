@@ -42,7 +42,7 @@ async def test_stream_detector_send_prompt():
     mock_page = AsyncMock()
     
     await detector.send_prompt(mock_page, "Hello World", agent_type="perplexity")
-    assert mock_page.keyboard.insert_text.called or mock_page.fill.called
+    assert mock_page.evaluate.called or mock_page.keyboard.insert_text.called or mock_page.fill.called
 
 @pytest.mark.asyncio
 async def test_wait_for_completion_terminal_tag_immediate():
@@ -55,12 +55,12 @@ async def test_wait_for_completion_terminal_tag_immediate():
     detector = StreamDetector(config, selectors)
     mock_page = AsyncMock()
     
-    mock_el = AsyncMock()
-    mock_el.inner_text = AsyncMock(return_value="[STATUS: COMMITTED]\nPR: https://github.com/o/r/pull/1\nSHA: 1234567")
-    mock_page.query_selector_all = AsyncMock(return_value=[mock_el])
-    
-    # Even if stop button is reported visible (ghost stop button)
-    mock_page.is_visible = AsyncMock(return_value=True)
+    mock_page.evaluate = AsyncMock(return_value={
+        "text": "[STATUS: COMMITTED]\nPR: https://github.com/o/r/pull/1\nSHA: 1234567",
+        "hasStop": True,
+        "hasAction": False,
+        "isTool": False
+    })
 
     result = await detector.wait_for_completion(mock_page, "chatgpt")
     assert "[STATUS: COMMITTED]" in result
