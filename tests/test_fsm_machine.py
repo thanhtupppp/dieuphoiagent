@@ -102,3 +102,15 @@ def test_save_session_record(tmp_path):
     assert data["repo"] == "owner/myrepo"
     assert data["loops"] == 3
     assert len(data["events"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_fsm_unknown_state_handler():
+    ctx = RunContext(current_repo="test/repo", current_turn="missing_state")
+    provider = DummyTestProvider()
+    transitions = {"other_state": ImmediateDoneHandler()}
+
+    await run_fsm(ctx, provider, transitions=transitions)
+    assert ctx.state == FSMState.RECOVERY_REQUIRED
+    assert "Unknown state handler for: missing_state" in ctx.last_error
+

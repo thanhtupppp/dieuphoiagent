@@ -13,6 +13,8 @@ from core.fsm.states import (
 )
 from core.providers.base import AgentProvider
 
+from core.fsm.retry import CircuitBreaker, ErrorType, classify_error
+
 DEFAULT_TRANSITIONS: dict[str, StateHandler] = {
     "perplexity": PerplexityLeadHandler(),
     "chatgpt": ChatGptDevHandler(),
@@ -51,9 +53,11 @@ async def run_fsm(
     context: RunContext,
     provider: AgentProvider,
     transitions: Optional[dict[str, StateHandler]] = None,
+    circuit_breaker: Optional[CircuitBreaker] = None,
 ) -> None:
     """Execute FSM loop transitioning across states according to the transition map."""
     table = transitions if transitions is not None else DEFAULT_TRANSITIONS
+    breaker = circuit_breaker if circuit_breaker is not None else CircuitBreaker(max_failures=5)
 
     try:
         current_state = context.current_turn
@@ -71,8 +75,15 @@ async def run_fsm(
             if not handler:
                 raise ValueError(f"Unknown state handler for: {current_state}")
 
-            current_state = await handler.handle(context, provider)
-            context.current_turn = current_state
+            try:
+                current_state = await handler.handle(context, provider)
+                context.current_turn = current_state
+                breaker.record_success()
+            except Exception as e:
+                err_type = classify_error(e)
+                if err_type == ErrorType.TRANSIENT:
+                    breaker.record_failure()
+                raise
 
             if current_state == "done" and context.state == FSMState.TASK_FINISHED:
                 save_session_record(context, "COMPLETED")

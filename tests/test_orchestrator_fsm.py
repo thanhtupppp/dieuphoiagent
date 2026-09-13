@@ -167,3 +167,17 @@ async def test_fsm_close_delegates_to_provider():
     await fsm.close()
     provider.close_mock.assert_awaited_once()
 
+
+@pytest.mark.asyncio
+async def test_fsm_circuit_breaker_reset_on_retry_step():
+    provider = DummyProvider()
+    fsm = OrchestratorFSM(
+        AppConfig(),
+        SelectorsConfig(perplexity={}, chatgpt={}),
+        provider=provider,
+    )
+    fsm.circuit_breaker.failures = 4
+    await fsm.retry_step()
+    assert fsm.circuit_breaker.failures == 0
+
+

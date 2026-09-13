@@ -10,7 +10,13 @@ from core.checkpoint_manager import (
     save_checkpoint,
 )
 from core.config_loader import AppConfig, SelectorsConfig
-from core.fsm import FSMState, RunContext, run_fsm, save_session_record
+from core.fsm import (
+    CircuitBreaker,
+    FSMState,
+    RunContext,
+    run_fsm,
+    save_session_record,
+)
 from core.providers.base import AgentProvider
 from core.providers.cdp_provider import CdpProvider
 from core.stream_detector import StreamDetector
@@ -28,6 +34,7 @@ class OrchestratorFSM:
         config: AppConfig,
         selectors: SelectorsConfig,
         provider: Optional[AgentProvider] = None,
+        circuit_breaker: Optional[CircuitBreaker] = None,
     ):
         self.config = config
         self.selectors = selectors
@@ -36,6 +43,7 @@ class OrchestratorFSM:
         self.max_loops: int = config.max_loops
         self.auto_mode: bool = True
         self.is_running: bool = False
+        self.circuit_breaker = circuit_breaker or CircuitBreaker(max_failures=5)
         self.provider: AgentProvider = (
             provider if provider is not None else CdpProvider(config, selectors)
         )
@@ -153,6 +161,7 @@ class OrchestratorFSM:
 
     async def retry_step(self) -> None:
         self.log("system", "Thực hiện thử lại bước hiện tại...")
+        self.circuit_breaker.reset()
         await self.resume_from_checkpoint()
 
     async def reconcile_and_resume(
@@ -220,7 +229,7 @@ class OrchestratorFSM:
         )
         self._active_context = ctx
 
-        await run_fsm(ctx, self.provider)
+        await run_fsm(ctx, self.provider, circuit_breaker=self.circuit_breaker)
 
         # Synchronize context back to OrchestratorFSM properties
         self.loop_count = ctx.loop_count
