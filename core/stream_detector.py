@@ -1,8 +1,39 @@
 import asyncio
 import time
-from typing import Optional, Callable
+import re
+from typing import Optional, Callable, Tuple
 from playwright.async_api import Page
 from core.config_loader import AppConfig, SelectorsConfig
+
+def check_terminal_signal(text: str, agent_type: str) -> Tuple[bool, str]:
+    """
+    Checks if text contains a terminal protocol tag or completed action:
+    Returns (is_terminal, status_label)
+    """
+    if not text or len(text.strip()) < 10:
+        return False, ""
+        
+    if agent_type == "perplexity":
+        if "[STATUS: READY_FOR_DEV]" in text or re.search(r"\[STATUS\s*:\s*READY_FOR_DEV\]", text, re.I):
+            return True, "READY_FOR_DEV"
+        if "[STATUS: NEEDS_REVISION]" in text or re.search(r"\[STATUS\s*:\s*NEEDS_REVISION\]", text, re.I):
+            return True, "NEEDS_REVISION"
+        if "[STATUS: COMPLETED]" in text or re.search(r"\[STATUS\s*:\s*COMPLETED\]", text, re.I):
+            return True, "COMPLETED"
+        if "[STATUS: ERROR]" in text or re.search(r"\[STATUS\s*:\s*ERROR\]", text, re.I):
+            return True, "ERROR"
+    else:  # chatgpt
+        if "[STATUS: COMMITTED]" in text or re.search(r"\[STATUS\s*:\s*COMMITTED\]", text, re.I):
+            return True, "COMMITTED"
+        if "[STATUS: ERROR]" in text or re.search(r"\[STATUS\s*:\s*ERROR\]", text, re.I):
+            return True, "ERROR"
+        # Heuristic fallback: GitHub PR URL present along with branch or commit sha
+        if re.search(r"https://github\.com/[^\s]+/pull/\d+", text) and (
+            re.search(r"\b[0-9a-f]{7,40}\b", text, re.I) or "ai-agent/" in text or "[BRANCH" in text
+        ):
+            return True, "COMMITTED"
+
+    return False, ""
 
 class StreamDetector:
     def __init__(self, config: AppConfig, selectors: SelectorsConfig):
@@ -71,6 +102,7 @@ class StreamDetector:
         s_stop = s_cfg.get("stop_button")
         s_resp = s_cfg.get("last_response")
         s_tool = s_cfg.get("tool_running_indicator")
+        s_action = s_cfg.get("action_buttons")
 
         start_time = time.time()
         timeout = self.config.timeout_seconds
@@ -81,37 +113,15 @@ class StreamDetector:
         last_text = ""
         stable_start: Optional[float] = None
         last_progress_time = start_time
+        detected_terminal_tag = False
+        terminal_status_name = ""
 
         while time.time() - start_time < timeout:
             now = time.time()
-            elapsed = now - start_time
-            if on_progress and (now - last_progress_time >= 25.0):
-                last_progress_time = now
-                on_progress(f"Đang đợi {agent_type.capitalize()} xử lý và chạy Tool... (đã đợi {int(elapsed)}s / {timeout}s)")
-            # 1. Stop button check
-            if s_stop and hasattr(page, "is_visible"):
-                try:
-                    stop_visible = await page.is_visible(s_stop)
-                    if stop_visible:
-                        stable_start = None
-                        await asyncio.sleep(1.0)
-                        continue
-                except Exception:
-                    pass
+            elapsed = int(now - start_time)
 
-            # 2. Tool calling indicator check (ChatGPT)
-            if s_tool and hasattr(page, "is_visible"):
-                try:
-                    tool_visible = await page.is_visible(s_tool)
-                    if tool_visible:
-                        stable_start = None
-                        await asyncio.sleep(1.5)
-                        continue
-                except Exception:
-                    pass
-
-            # 3. Text stability check
-            current_text = last_text
+            # 1. Fetch current response text
+            current_text = ""
             if hasattr(page, "query_selector_all") and s_resp:
                 try:
                     elements = await page.query_selector_all(s_resp)
@@ -120,14 +130,82 @@ class StreamDetector:
                 except Exception:
                     pass
 
-            if current_text and current_text == last_text:
-                if stable_start is None:
-                    stable_start = time.time()
-                elif time.time() - stable_start >= stability_duration:
-                    return current_text
-            else:
+            # 2. Check if terminal protocol tag is present in current text
+            is_terminal, status_label = check_terminal_signal(current_text, agent_type)
+            if is_terminal and not detected_terminal_tag:
+                detected_terminal_tag = True
+                terminal_status_name = status_label
+                if on_progress:
+                    on_progress(f"Đã phát hiện tín hiệu hoàn tất [{status_label}]. Đang kiểm tra ổn định dữ liệu...")
+
+            # 3. Check DOM signals (Action buttons like copy button, Stop button, Tool running)
+            has_action_buttons = False
+            if s_action and hasattr(page, "query_selector_all"):
+                try:
+                    act_btns = await page.query_selector_all(s_action)
+                    for b in act_btns:
+                        if await b.is_visible():
+                            has_action_buttons = True
+                            break
+                except Exception:
+                    pass
+
+            stop_visible = False
+            if s_stop and hasattr(page, "is_visible"):
+                try:
+                    stop_visible = await page.is_visible(s_stop)
+                except Exception:
+                    pass
+
+            is_tool_running = False
+            if s_tool and hasattr(page, "is_visible"):
+                try:
+                    is_tool_running = await page.is_visible(s_tool)
+                except Exception:
+                    pass
+
+            # 4. Progress logging every 5 seconds
+            if on_progress and (now - last_progress_time >= 5.0):
+                last_progress_time = now
+                if is_tool_running:
+                    on_progress(f"AI đang thực thi công cụ (Tool Calling)... ({elapsed}s)")
+                elif current_text and len(current_text) > len(last_text):
+                    on_progress(f"Đang nhận dữ liệu trực tiếp ({len(current_text)} ký tự)... ({elapsed}s)")
+                elif detected_terminal_tag:
+                    on_progress(f"Đang chốt kết quả sau tag [{terminal_status_name}]... ({elapsed}s)")
+                else:
+                    on_progress(f"Đang chờ {agent_type.capitalize()} phản hồi... ({elapsed}s / {timeout}s)")
+
+            # 5. Stability & Completion Verification
+            # Text changed? Reset stability
+            if len(current_text) != len(last_text) or current_text != last_text:
                 last_text = current_text
                 stable_start = None
+            elif current_text and current_text == last_text:
+                # Text has stopped changing
+                if stable_start is None:
+                    stable_start = now
+                else:
+                    stable_duration = now - stable_start
+
+                    # CASE A: Terminal tag is present AND text has stabilized for stability_duration
+                    # (Even if stop button lingers as a ghost, terminal tag proves generation ended!)
+                    if detected_terminal_tag and stable_duration >= stability_duration:
+                        if on_progress:
+                            on_progress(f"Hoàn thành chính xác qua Thẻ Giao Thức [{terminal_status_name}] ({elapsed}s)")
+                        return current_text
+
+                    # CASE B: Turn action buttons (Copy / Feedback) are visible AND text is stable
+                    if has_action_buttons and not is_tool_running and stable_duration >= stability_duration:
+                        if on_progress:
+                            on_progress(f"Hoàn thành chính xác qua DOM Action Buttons ({elapsed}s)")
+                        return current_text
+
+                    # CASE C: No stop button, no tool running, text stable
+                    if not stop_visible and not is_tool_running and stable_duration >= stability_duration:
+                        if on_progress:
+                            on_progress(f"Hoàn thành phản hồi (Stop button unmounted, text ổn định {elapsed}s)")
+                        return current_text
 
             await asyncio.sleep(0.8)
 

@@ -8,8 +8,8 @@ class AppConfig(BaseModel):
     cdp_url: str = "http://localhost:9222"
     cdp_port: int = 9222
     max_loops: int = Field(default=5, alias="default_max_loops")
-    timeout_seconds: int = 240
-    text_stability_seconds: float = 2.5
+    timeout_seconds: int = 600
+    text_stability_seconds: float = 2.0
     reconnect_attempts: int = 3
     reconnect_delay_seconds: float = 2.0
     browser_path: str = ""
