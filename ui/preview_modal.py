@@ -1,32 +1,32 @@
-from typing import Callable
+from typing import Any, Callable
 
 
 class PreviewModalState:
-    def __init__(self):
+    def __init__(self) -> None:
         self.is_visible: bool = False
         self.target: str = ""
         self.payload: str = ""
 
-    def open_modal(self, target: str, payload: str):
+    def open_modal(self, target: str, payload: str) -> None:
         self.is_visible = True
         self.target = target
         self.payload = payload
 
-    def close_modal(self):
+    def close_modal(self) -> None:
         self.is_visible = False
 
 
 class PreviewModal:
-    def __init__(self, on_approve: Callable[[str], None], on_reject: Callable[[], None]):
+    def __init__(self, on_approve: Callable[[str], None], on_reject: Callable[[], None]) -> None:
         self.on_approve = on_approve
         self.on_reject = on_reject
         self.state = PreviewModalState()
-        self.dialog = None
-        self.title_label = None
-        self.payload_input = None
+        self.dialog: Any = None
+        self.title_label: Any = None
+        self.payload_input: Any = None
         self._build_dialog()
 
-    def _build_dialog(self):
+    def _build_dialog(self) -> None:
         try:
             from nicegui import ui
             with ui.dialog() as self.dialog, ui.card().classes("w-[700px] max-w-4xl p-6"):
@@ -39,7 +39,7 @@ class PreviewModal:
         except Exception:
             pass
 
-    def show(self, target: str, payload: str):
+    def show(self, target: str, payload: str) -> None:
         self.state.open_modal(target, payload)
         if self.title_label:
             self.title_label.text = f"Duyệt Payload chuyển giao sang {target}"
@@ -48,14 +48,14 @@ class PreviewModal:
         if self.dialog:
             self.dialog.open()
 
-    def _handle_approve(self):
+    def _handle_approve(self) -> None:
         self.state.close_modal()
         if self.dialog:
             self.dialog.close()
         text_val = self.payload_input.value if self.payload_input else self.state.payload
         self.on_approve(text_val)
 
-    def _handle_reject(self):
+    def _handle_reject(self) -> None:
         self.state.close_modal()
         if self.dialog:
             self.dialog.close()

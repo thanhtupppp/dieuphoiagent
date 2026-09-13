@@ -80,7 +80,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --locked
+        run: uv sync --locked --all-extras
       - name: Type-check core and UI
         run: uv run mypy core ui
 
@@ -97,7 +97,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --locked
+        run: uv sync --locked --all-extras
       - name: Run tests with coverage
         run: >-
           uv run pytest
@@ -131,7 +131,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --locked
+        run: uv sync --locked --all-extras
       - name: Run all pre-commit hooks
         run: uv run pre-commit run --all-files
 
