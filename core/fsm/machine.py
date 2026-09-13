@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core.checkpoint_manager import TaskCheckpoint, save_checkpoint
+from core.checkpoint_manager import TaskCheckpoint
 from core.fsm.context import FSMState, RunContext
 from core.fsm.states import (
     ApprovalHandler,
@@ -103,7 +103,7 @@ async def run_fsm(
             "Hệ thống đang chờ lệnh cứu hộ: bạn có thể bấm 'Thử lại bước' "
             "(Retry) hoặc 'Tiếp tục từ Checkpoint' (Resume).",
         )
-        save_checkpoint(
+        context.save_checkpoint(
             TaskCheckpoint(
                 repo=context.current_repo,
                 branch=context.current_branch,

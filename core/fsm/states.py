@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from core.checkpoint_manager import TaskCheckpoint, clear_checkpoint, save_checkpoint
+from core.checkpoint_manager import TaskCheckpoint
 from core.fsm.context import FSMState, RunContext
 from core.providers.base import AgentProvider, AgentRequest, AgentRole
 from core.tag_protocol import AgentStatus, parse_agent_output
@@ -58,7 +58,7 @@ class PerplexityLeadHandler(StateHandler):
         if p_result.status == AgentStatus.COMPLETED:
             context.set_state(FSMState.TASK_FINISHED)
             context.log("system", "Task đã được nghiệm thu hoàn tất!")
-            clear_checkpoint()
+            context.clear_checkpoint()
             return "done"
 
         chatgpt_prompt = (
@@ -66,7 +66,7 @@ class PerplexityLeadHandler(StateHandler):
             f"{raw_p_resp}\n\n[TARGET REPO]: {context.current_repo}"
         )
 
-        save_checkpoint(
+        context.save_checkpoint(
             TaskCheckpoint(
                 repo=context.current_repo,
                 branch=context.current_branch,
@@ -166,7 +166,7 @@ class ChatGptDevHandler(StateHandler):
 
         context.next_prompt = next_prompt
 
-        save_checkpoint(
+        context.save_checkpoint(
             TaskCheckpoint(
                 repo=context.current_repo,
                 branch=context.current_branch,

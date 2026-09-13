@@ -59,6 +59,8 @@ class RunContext:
     on_state_change: Optional[Callable[[FSMState], None]] = None
     on_log: Optional[Callable[[str, str], None]] = None
     on_approval_required: Optional[Callable[[str, TagParseResult], None]] = None
+    save_checkpoint_fn: Optional[Callable[[Any], None]] = None
+    clear_checkpoint_fn: Optional[Callable[[], None]] = None
     logs: list[dict[str, Any]] = field(default_factory=list)
 
     def set_state(self, new_state: FSMState) -> None:
@@ -70,3 +72,17 @@ class RunContext:
         self.logs.append({"timestamp": time.time(), "source": source, "message": message})
         if self.on_log:
             self.on_log(source, message)
+
+    def save_checkpoint(self, cp: Any) -> None:
+        if self.save_checkpoint_fn is not None:
+            self.save_checkpoint_fn(cp)
+        else:
+            from core.checkpoint_manager import save_checkpoint
+            save_checkpoint(cp)
+
+    def clear_checkpoint(self) -> None:
+        if self.clear_checkpoint_fn is not None:
+            self.clear_checkpoint_fn()
+        else:
+            from core.checkpoint_manager import clear_checkpoint
+            clear_checkpoint()
