@@ -3,7 +3,7 @@ import json
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Optional, Dict, Any, List
+from typing import Any, Callable, Dict, List, Optional
 
 from core.checkpoint_manager import (
     TaskCheckpoint,
@@ -208,10 +208,12 @@ class OrchestratorFSM:
                     self.last_attempted_agent = "perplexity"
                     self.last_attempted_payload = next_prompt
                     self.log("perplexity", "Gửi yêu cầu phân tích vào Perplexity...")
+                    assert self.connector.perplexity_tab is not None
                     await self.detector.send_prompt(
                         self.connector.perplexity_tab, next_prompt, "perplexity"
                     )
                     self.set_state(FSMState.PERPLEXITY_WAITING)
+                    assert self.connector.perplexity_tab is not None
                     raw_p_resp = await self.detector.wait_for_completion(
                         self.connector.perplexity_tab,
                         "perplexity",
@@ -266,10 +268,12 @@ class OrchestratorFSM:
                     self.last_attempted_agent = "chatgpt"
                     self.last_attempted_payload = next_prompt
                     self.log("chatgpt", "Chuyển payload sang ChatGPT...")
+                    assert self.connector.chatgpt_tab is not None
                     await self.detector.send_prompt(
                         self.connector.chatgpt_tab, next_prompt, "chatgpt"
                     )
                     self.set_state(FSMState.CHATGPT_WAITING)
+                    assert self.connector.chatgpt_tab is not None
                     raw_c_resp = await self.detector.wait_for_completion(
                         self.connector.chatgpt_tab,
                         "chatgpt",
