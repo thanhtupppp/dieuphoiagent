@@ -1,6 +1,5 @@
-from pathlib import Path
-import pytest
-from core.config_loader import load_config, load_selectors, AppConfig, SelectorsConfig
+from core.config_loader import AppConfig, SelectorsConfig, load_config, load_selectors
+
 
 def test_load_config_defaults():
     config = load_config("config/config.yaml")
@@ -9,6 +8,7 @@ def test_load_config_defaults():
     assert config.max_loops == 5
     assert config.timeout_seconds == 600
     assert config.text_stability_seconds == 2.5
+
 
 def test_load_selectors():
     selectors = load_selectors("config/selectors.json")
