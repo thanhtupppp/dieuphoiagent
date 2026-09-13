@@ -1,3 +1,9 @@
+"""
+ApiProvider — CHỈ DÙNG CHO CI/CD VÀ FALLBACK.
+Production chạy 100% trên CdpProvider (Chrome CDP miễn phí).
+Không cần cấu hình API key để chạy hệ thống.
+"""
+
 import os
 import time
 from typing import Any, Optional
