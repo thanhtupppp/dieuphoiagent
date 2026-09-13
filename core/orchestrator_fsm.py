@@ -85,6 +85,8 @@ class OrchestratorFSM:
             self.set_state(FSMState.CDP_ERROR)
             self.log("system", "Không tìm thấy đủ tab Perplexity và ChatGPT.")
             return False
+        self.connector.perplexity_tab = p_tab
+        self.connector.chatgpt_tab = c_tab
         return True
 
     async def start_task(
@@ -208,14 +210,15 @@ class OrchestratorFSM:
                     self.last_attempted_agent = "perplexity"
                     self.last_attempted_payload = next_prompt
                     self.log("perplexity", "Gửi yêu cầu phân tích vào Perplexity...")
-                    assert self.connector.perplexity_tab is not None
+                    p_tab = self.connector.perplexity_tab
+                    if p_tab is None:
+                        raise RuntimeError("Tab Perplexity không sẵn sàng!")
                     await self.detector.send_prompt(
-                        self.connector.perplexity_tab, next_prompt, "perplexity"
+                        p_tab, next_prompt, "perplexity"
                     )
                     self.set_state(FSMState.PERPLEXITY_WAITING)
-                    assert self.connector.perplexity_tab is not None
                     raw_p_resp = await self.detector.wait_for_completion(
-                        self.connector.perplexity_tab,
+                        p_tab,
                         "perplexity",
                         on_progress=lambda msg: self.log("perplexity", msg),
                     )
@@ -268,14 +271,15 @@ class OrchestratorFSM:
                     self.last_attempted_agent = "chatgpt"
                     self.last_attempted_payload = next_prompt
                     self.log("chatgpt", "Chuyển payload sang ChatGPT...")
-                    assert self.connector.chatgpt_tab is not None
+                    c_tab = self.connector.chatgpt_tab
+                    if c_tab is None:
+                        raise RuntimeError("Tab ChatGPT không sẵn sàng!")
                     await self.detector.send_prompt(
-                        self.connector.chatgpt_tab, next_prompt, "chatgpt"
+                        c_tab, next_prompt, "chatgpt"
                     )
                     self.set_state(FSMState.CHATGPT_WAITING)
-                    assert self.connector.chatgpt_tab is not None
                     raw_c_resp = await self.detector.wait_for_completion(
-                        self.connector.chatgpt_tab,
+                        c_tab,
                         "chatgpt",
                         on_progress=lambda msg: self.log("chatgpt", msg),
                     )
@@ -335,7 +339,7 @@ class OrchestratorFSM:
                 )
                 self._save_session("HALTED")
         except Exception as e:
-            err_msg = str(e)
+            err_msg = str(e) or type(e).__name__
             self.set_state(FSMState.RECOVERY_REQUIRED)
             self.is_running = False
             self.log(

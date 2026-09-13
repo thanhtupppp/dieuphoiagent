@@ -6,3 +6,4 @@ storage/logs/*.log
 storage/sessions/*.json
 storage/checkpoint.json
 .pytest_cache/
+.coverage
