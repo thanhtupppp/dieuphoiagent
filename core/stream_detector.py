@@ -17,13 +17,48 @@ class StreamDetector:
             s_input = self.selectors.chatgpt["prompt_textarea"]
             s_send = self.selectors.chatgpt["send_button"]
 
+        el = None
         if hasattr(page, "wait_for_selector"):
-            await page.wait_for_selector(s_input, timeout=10000)
-        if hasattr(page, "fill"):
+            try:
+                el = await page.wait_for_selector(s_input, timeout=15000)
+            except Exception:
+                el = await page.query_selector(s_input)
+        elif hasattr(page, "query_selector"):
+            el = await page.query_selector(s_input)
+
+        if el:
+            if hasattr(el, "click"):
+                await el.click()
+            if hasattr(el, "focus"):
+                await el.focus()
+            await asyncio.sleep(0.3)
+
+            # Try keyboard.insert_text first (works for Lexical / ProseMirror contenteditable and textarea)
+            if hasattr(page, "keyboard") and hasattr(page.keyboard, "insert_text"):
+                await page.keyboard.insert_text(text)
+            elif hasattr(el, "fill"):
+                await el.fill(text)
+            elif hasattr(page, "fill"):
+                await page.fill(s_input, text)
+        elif hasattr(page, "fill"):
             await page.fill(s_input, text)
-        await asyncio.sleep(0.3)
-        if hasattr(page, "click"):
-            await page.click(s_send)
+
+        await asyncio.sleep(0.5)
+
+        # Try clicking send button
+        submitted = False
+        if hasattr(page, "query_selector") and s_send:
+            try:
+                btn = await page.query_selector(s_send)
+                if btn and await btn.is_visible():
+                    await btn.click()
+                    submitted = True
+            except Exception:
+                pass
+
+        # Fallback: Press Enter to submit
+        if not submitted and hasattr(page, "keyboard"):
+            await page.keyboard.press("Enter")
 
     async def wait_for_completion(self, page: Page, agent_type: str) -> str:
         s_cfg = self.selectors.perplexity if agent_type == "perplexity" else self.selectors.chatgpt

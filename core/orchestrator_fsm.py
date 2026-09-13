@@ -86,71 +86,75 @@ class OrchestratorFSM:
         asyncio.create_task(self._run_loop())
 
     async def _run_loop(self):
-        p_lead_template = Path("prompts/perplexity_lead.md").read_text(encoding="utf-8")
-        first_prompt = f"{p_lead_template}\n\n[MỤC TIÊU BÀI TOÁN]:\nRepository: {self.current_repo}\nBranch: {self.current_branch}\nYêu cầu: {self.current_goal}"
-        
-        next_prompt = first_prompt
-        while self.is_running and self.loop_count < self.max_loops:
-            self.loop_count += 1
-            self.log("system", f"--- Bắt đầu Vòng lặp {self.loop_count} / {self.max_loops} ---")
-
-            # 1. Gửi Perplexity
-            self.set_state(FSMState.PERPLEXITY_SENDING)
-            self.log("perplexity", "Gửi yêu cầu phân tích vào Perplexity...")
-            await self.detector.send_prompt(self.connector.perplexity_tab, next_prompt, "perplexity")
-
-            self.set_state(FSMState.PERPLEXITY_WAITING)
-            raw_p_resp = await self.detector.wait_for_completion(self.connector.perplexity_tab, "perplexity")
+        try:
+            p_lead_template = Path("prompts/perplexity_lead.md").read_text(encoding="utf-8")
+            first_prompt = f"{p_lead_template}\n\n[MỤC TIÊU BÀI TOÁN]:\nRepository: {self.current_repo}\nBranch: {self.current_branch}\nYêu cầu: {self.current_goal}"
             
-            self.set_state(FSMState.PERPLEXITY_PARSING)
-            p_result = parse_agent_output(raw_p_resp, source="perplexity")
-            self.log("perplexity", f"Nhận kết quả: {p_result.status.value}")
+            next_prompt = first_prompt
+            while self.is_running and self.loop_count < self.max_loops:
+                self.loop_count += 1
+                self.log("system", f"--- Bắt đầu Vòng lặp {self.loop_count} / {self.max_loops} ---")
 
-            if p_result.status == AgentStatus.COMPLETED:
-                self.set_state(FSMState.TASK_FINISHED)
-                self.log("system", "Task đã được nghiệm thu hoàn tất!")
-                self._save_session("COMPLETED")
-                return
+                # 1. Gửi Perplexity
+                self.set_state(FSMState.PERPLEXITY_SENDING)
+                self.log("perplexity", "Gửi yêu cầu phân tích vào Perplexity...")
+                await self.detector.send_prompt(self.connector.perplexity_tab, next_prompt, "perplexity")
 
-            # Chờ duyệt nếu ở chế độ Step-by-step
-            c_dev_template = Path("prompts/chatgpt_dev.md").read_text(encoding="utf-8")
-            chatgpt_prompt = f"{c_dev_template}\n\n[TASK_SPEC FROM TECH LEAD]:\n{raw_p_resp}\n\n[TARGET REPO]: {self.current_repo}"
-            
-            if not self.auto_mode:
-                self.set_state(FSMState.WAITING_USER_APPROVAL)
-                self.pending_payload = chatgpt_prompt
-                self.target_agent_for_pending = "chatgpt"
-                self.approval_event.clear()
-                if self.on_approval_required:
-                    self.on_approval_required("ChatGPT", p_result)
-                await self.approval_event.wait()
-                chatgpt_prompt = self.pending_payload
+                self.set_state(FSMState.PERPLEXITY_WAITING)
+                raw_p_resp = await self.detector.wait_for_completion(self.connector.perplexity_tab, "perplexity")
+                
+                self.set_state(FSMState.PERPLEXITY_PARSING)
+                p_result = parse_agent_output(raw_p_resp, source="perplexity")
+                self.log("perplexity", f"Nhận kết quả: {p_result.status.value}")
 
-            if not self.is_running:
-                break
+                if p_result.status == AgentStatus.COMPLETED:
+                    self.set_state(FSMState.TASK_FINISHED)
+                    self.log("system", "Task đã được nghiệm thu hoàn tất!")
+                    self._save_session("COMPLETED")
+                    return
 
-            # 2. Gửi ChatGPT
-            self.set_state(FSMState.CHATGPT_SENDING)
-            self.log("chatgpt", "Chuyển payload sang ChatGPT...")
-            await self.detector.send_prompt(self.connector.chatgpt_tab, chatgpt_prompt, "chatgpt")
+                # Chờ duyệt nếu ở chế độ Step-by-step
+                c_dev_template = Path("prompts/chatgpt_dev.md").read_text(encoding="utf-8")
+                chatgpt_prompt = f"{c_dev_template}\n\n[TASK_SPEC FROM TECH LEAD]:\n{raw_p_resp}\n\n[TARGET REPO]: {self.current_repo}"
+                
+                if not self.auto_mode:
+                    self.set_state(FSMState.WAITING_USER_APPROVAL)
+                    self.pending_payload = chatgpt_prompt
+                    self.target_agent_for_pending = "chatgpt"
+                    self.approval_event.clear()
+                    if self.on_approval_required:
+                        self.on_approval_required("ChatGPT", p_result)
+                    await self.approval_event.wait()
+                    chatgpt_prompt = self.pending_payload
 
-            self.set_state(FSMState.CHATGPT_WAITING)
-            raw_c_resp = await self.detector.wait_for_completion(self.connector.chatgpt_tab, "chatgpt")
+                if not self.is_running:
+                    break
 
-            self.set_state(FSMState.CHATGPT_PARSING)
-            c_result = parse_agent_output(raw_c_resp, source="chatgpt")
-            self.log("chatgpt", f"Nhận kết quả: {c_result.status.value}")
+                # 2. Gửi ChatGPT
+                self.set_state(FSMState.CHATGPT_SENDING)
+                self.log("chatgpt", "Chuyển payload sang ChatGPT...")
+                await self.detector.send_prompt(self.connector.chatgpt_tab, chatgpt_prompt, "chatgpt")
 
-            if c_result.status == AgentStatus.ERROR:
-                self.log("chatgpt", "ChatGPT báo lỗi, gửi lại Perplexity phân tích...")
-                next_prompt = f"[BÁO CÁO SỰ CỐ TỪ DEV]:\n{raw_c_resp}\nHãy phân tích nguyên nhân và cập nhật hướng dẫn sửa đổi."
-            else:
-                next_prompt = f"[KẾT QUẢ PULL REQUEST TỪ DEV]:\n{raw_c_resp}\nHãy nghiệm thu mã nguồn này và xuất [STATUS: COMPLETED] nếu đạt chuẩn hoặc [STATUS: NEEDS_REVISION] nếu cần sửa."
+                self.set_state(FSMState.CHATGPT_WAITING)
+                raw_c_resp = await self.detector.wait_for_completion(self.connector.chatgpt_tab, "chatgpt")
 
-        if self.loop_count >= self.max_loops and self.is_running:
-            self.set_state(FSMState.MAX_LOOPS_HALTED)
-            self.log("system", f"Đã chạm trần Max Loops ({self.max_loops}). Tạm dừng để người dùng duyệt tay.")
-            self._save_session("HALTED")
+                self.set_state(FSMState.CHATGPT_PARSING)
+                c_result = parse_agent_output(raw_c_resp, source="chatgpt")
+                self.log("chatgpt", f"Nhận kết quả: {c_result.status.value}")
+
+                if c_result.status == AgentStatus.ERROR:
+                    self.log("chatgpt", "ChatGPT báo lỗi, gửi lại Perplexity phân tích...")
+                    next_prompt = f"[BÁO CÁO SỰ CỐ TỪ DEV]:\n{raw_c_resp}\nHãy phân tích nguyên nhân và cập nhật hướng dẫn sửa đổi."
+                else:
+                    next_prompt = f"[KẾT QUẢ PULL REQUEST TỪ DEV]:\n{raw_c_resp}\nHãy nghiệm thu mã nguồn này và xuất [STATUS: COMPLETED] nếu đạt chuẩn hoặc [STATUS: NEEDS_REVISION] nếu cần sửa."
+
+            if self.loop_count >= self.max_loops and self.is_running:
+                self.set_state(FSMState.MAX_LOOPS_HALTED)
+                self.log("system", f"Đã chạm trần Max Loops ({self.max_loops}). Tạm dừng để người dùng duyệt tay.")
+                self._save_session("HALTED")
+        except Exception as e:
+            self.set_state(FSMState.CDP_ERROR)
+            self.log("system", f"Lỗi thực thi trong vòng lặp: {str(e)}")
 
     def approve_step(self, modified_payload: Optional[str] = None):
         if modified_payload:

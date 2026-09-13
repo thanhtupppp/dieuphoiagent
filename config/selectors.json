@@ -1,14 +1,14 @@
 {
   "perplexity": {
     "url_match": "perplexity.ai",
-    "input_textarea": "textarea[placeholder*='Ask'], textarea",
-    "send_button": "button[aria-label*='Submit'], button:has(svg.lucide-arrow-right)",
+    "input_textarea": "#ask-input, div[contenteditable='true'], textarea",
+    "send_button": "button[aria-label='Submit'], button[aria-label*='Submit'], button:has(svg.lucide-arrow-right)",
     "stop_button": "button:has-text('Stop')",
-    "last_response": "div[data-testid='answer-content'], div.prose:last-of-type"
+    "last_response": "div[data-testid='answer-content'], div.prose:last-of-type, div.default"
   },
   "chatgpt": {
     "url_match": "chatgpt.com",
-    "prompt_textarea": "#prompt-textarea, div[contenteditable='true']",
+    "prompt_textarea": "#prompt-textarea, div[contenteditable='true'], textarea",
     "send_button": "button[data-testid='send-button']",
     "stop_button": "button[data-testid='stop-button']",
     "last_response": "div[data-message-author-role='assistant']:last-of-type",
