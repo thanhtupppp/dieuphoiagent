@@ -1,13 +1,13 @@
-import pytest
 from core.tag_protocol import (
-    parse_agent_output,
     AgentStatus,
-    TaskSpecPayload,
-    RevisionPayload,
-    CompletionPayload,
     CommitReportPayload,
-    ErrorReportPayload
+    CompletionPayload,
+    ErrorReportPayload,
+    RevisionPayload,
+    TaskSpecPayload,
+    parse_agent_output,
 )
+
 
 def test_parse_perplexity_ready_for_dev():
     sample = """
@@ -24,6 +24,7 @@ def test_parse_perplexity_ready_for_dev():
     assert res.payload.task == "Sửa lỗi memory leak trong module cache"
     assert "core/cache.py" in res.payload.affected_files
 
+
 def test_parse_perplexity_needs_revision():
     sample = """
     [SPEC_VERSION: 1.0]
@@ -38,6 +39,7 @@ def test_parse_perplexity_needs_revision():
     assert isinstance(res.payload, RevisionPayload)
     assert res.payload.branch == "ai-agent/fix-cache"
 
+
 def test_parse_perplexity_completed():
     sample = """
     Tuyệt vời, code đã đạt chuẩn.
@@ -47,6 +49,7 @@ def test_parse_perplexity_completed():
     res = parse_agent_output(sample, source="perplexity")
     assert res.status == AgentStatus.COMPLETED
     assert isinstance(res.payload, CompletionPayload)
+
 
 def test_parse_chatgpt_committed():
     sample = """
@@ -63,6 +66,7 @@ def test_parse_chatgpt_committed():
     assert isinstance(res.payload, CommitReportPayload)
     assert res.payload.commit_sha == "a1b2c3d"
 
+
 def test_parse_chatgpt_error():
     sample = """
     [STATUS: ERROR]
@@ -73,6 +77,7 @@ def test_parse_chatgpt_error():
     res = parse_agent_output(sample, source="chatgpt")
     assert res.status == AgentStatus.ERROR
     assert isinstance(res.payload, ErrorReportPayload)
+
 
 def test_parse_chatgpt_fallback_heuristic():
     sample = """
