@@ -9,7 +9,7 @@
 
 ## 1. Tổng Quan Dự Án (Executive Summary)
 
-Dự án nhằm xây dựng một hệ thống Desktop Orchestrator tự động hóa chu trình khép kín giữa khâu **Nghiên cứu/Kiểm định (Perplexity AI trên trình duyệt Comet)** và khâu **Lập trình/Commit (ChatGPT kết hợp GitHub Plugin/Action)**. 
+Dự án nhằm xây dựng một hệ thống Desktop Orchestrator tự động hóa chu trình khép kín giữa khâu **Nghiên cứu/Kiểm định (Perplexity AI trên trình duyệt Comet)** và khâu **Lập trình/Commit (ChatGPT kết hợp GitHub Plugin/Action)**.
 
 Toàn bộ quá trình được điều phối thông qua một ứng dụng giao diện trực quan viết bằng **Python + Playwright + NiceGUI**, gắn kết với trình duyệt Comet/Chromium thông qua giao thức **Chrome DevTools Protocol (CDP)** trên cổng `9222`.
 
@@ -17,11 +17,11 @@ Toàn bộ quá trình được điều phối thông qua một ứng dụng gia
 
 ## 2. Phân Vai Hệ Thống (System Roles)
 
-| Thực thể | Vai trò đảm nhiệm | Nền tảng / Công nghệ | Nhiệm vụ chính |
-| :--- | :--- | :--- | :--- |
-| **Comet (Tab 1)** | *Tech Lead & Code Reviewer* | Perplexity AI (Web UI) | • Tra cứu tài liệu, giải pháp mới nhất.<br>• Phân tích yêu cầu, xuất đặc tả kỹ thuật `[TASK_SPEC]`.<br>• Nghiệm thu PR sau commit: xuất `[NEEDS_REVISION]` nếu cần sửa hoặc `[STATUS: COMPLETED]` khi đạt chuẩn. |
-| **ChatGPT (Tab 2)** | *Core Dev & Git Operator* | ChatGPT + GitHub Tool/Plugin | • Viết mã nguồn hoàn chỉnh.<br>• Gọi GitHub Plugin tạo nhánh có tiền tố `ai-agent/`, commit và mở/cập nhật PR.<br>• Xuất thẻ `[STATUS: COMMITTED]` kèm SHA/PR URL hoặc `[STATUS: ERROR]` khi gặp lỗi. |
-| **Orchestrator** | *Project Manager & Router* | Python + Playwright + NiceGUI | • Bắt nhịp streaming khi AI sinh xong câu trả lời và tool gọi xong.<br>• Parser Regex bóc tách các thẻ dữ liệu `[TAG]`.<br>• Điều phối FSM chuyển giao dữ liệu giữa 2 tab.<br>• Giao diện điều khiển (Auto-pilot & Step-by-step), đếm giới hạn vòng lặp, nút ngắt khẩn cấp. |
+| Thực thể            | Vai trò đảm nhiệm           | Nền tảng / Công nghệ          | Nhiệm vụ chính                                                                                                                                                                                                                                                              |
+| :------------------ | :-------------------------- | :---------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Comet (Tab 1)**   | _Tech Lead & Code Reviewer_ | Perplexity AI (Web UI)        | • Tra cứu tài liệu, giải pháp mới nhất.<br>• Phân tích yêu cầu, xuất đặc tả kỹ thuật `[TASK_SPEC]`.<br>• Nghiệm thu PR sau commit: xuất `[NEEDS_REVISION]` nếu cần sửa hoặc `[STATUS: COMPLETED]` khi đạt chuẩn.                                                            |
+| **ChatGPT (Tab 2)** | _Core Dev & Git Operator_   | ChatGPT + GitHub Tool/Plugin  | • Viết mã nguồn hoàn chỉnh.<br>• Gọi GitHub Plugin tạo nhánh có tiền tố `ai-agent/`, commit và mở/cập nhật PR.<br>• Xuất thẻ `[STATUS: COMMITTED]` kèm SHA/PR URL hoặc `[STATUS: ERROR]` khi gặp lỗi.                                                                       |
+| **Orchestrator**    | _Project Manager & Router_  | Python + Playwright + NiceGUI | • Bắt nhịp streaming khi AI sinh xong câu trả lời và tool gọi xong.<br>• Parser Regex bóc tách các thẻ dữ liệu `[TAG]`.<br>• Điều phối FSM chuyển giao dữ liệu giữa 2 tab.<br>• Giao diện điều khiển (Auto-pilot & Step-by-step), đếm giới hạn vòng lặp, nút ngắt khẩn cấp. |
 
 ---
 
@@ -103,6 +103,7 @@ dieuphoiagent/
 ### 5.1. Thẻ từ Perplexity (Tab 1)
 
 #### A. Giao việc ban đầu (`[STATUS: READY_FOR_DEV]`)
+
 ```text
 [SPEC_VERSION: 1.0]
 [TASK]: <Mô tả chi tiết logic cần sửa hoặc tính năng cần viết>
@@ -112,6 +113,7 @@ dieuphoiagent/
 ```
 
 #### B. Yêu cầu sửa đổi khi review chưa đạt (`[STATUS: NEEDS_REVISION]`)
+
 ```text
 [SPEC_VERSION: 1.0]
 [BRANCH: ai-agent/<tên_branch_cũ>]
@@ -122,6 +124,7 @@ dieuphoiagent/
 ```
 
 #### C. Nghiệm thu hoàn tất (`[STATUS: COMPLETED]`)
+
 ```text
 [STATUS: COMPLETED]
 [SUMMARY]: <Đánh giá tổng quan, xác nhận code đạt chuẩn và không còn lỗi tồn đọng>
@@ -130,6 +133,7 @@ dieuphoiagent/
 ### 5.2. Thẻ từ ChatGPT (Tab 2)
 
 #### A. Commit và tạo/cập nhật PR thành công (`[STATUS: COMMITTED]`)
+
 ```text
 [STATUS: COMMITTED]
 [BRANCH: ai-agent/<tên_branch>]
@@ -139,6 +143,7 @@ dieuphoiagent/
 ```
 
 #### B. Báo cáo sự cố khi gặp lỗi (`[STATUS: ERROR]`)
+
 ```text
 [STATUS: ERROR]
 [BRANCH: ai-agent/<tên_branch>]
@@ -147,6 +152,7 @@ dieuphoiagent/
 ```
 
 ### 5.3. Bộ Parser Regex & Fallback Heuristic
+
 - **Biểu thức chính quy:** Bóc tách linh hoạt kể cả khi thẻ bị bọc trong Markdown code block hoặc có khoảng trắng thừa.
 - **Heuristic Fallback:** Nếu ChatGPT quên sinh thẻ `[STATUS: COMMITTED]` nhưng câu trả lời có link GitHub PR (`github.com/.../pull/...`) và chuỗi SHA, parser tự động trích xuất và coi trạng thái là `COMMITTED`.
 
@@ -156,7 +162,7 @@ dieuphoiagent/
 
 1. **Quản lý kết nối CDP (`cdp_connector.py`):**
    - Kết nối tới `http://localhost:9222` thông qua `playwright.chromium.connect_over_cdp`.
-   - Tự động quét và gán `tab_perplexity` (URL chứa `perplexity.ai`) và `tab_chatgpt` (URL chứa `chatgpt.com` hoặc `chat.openai.com`).
+   - Tự động quét và gán `tab_perplexity` (URL chứa `perplexity.ai`) và `tab_chatgpt` (URL chứa `chatgpt.com` hoặc `chat.openai.com`, hoặc `chat.com`).
    - Hỗ trợ tự động kết nối lại khi trình duyệt reload hoặc ngắt đột ngột (thử tối đa 3 lần).
 2. **Bộ nhận diện 3 lớp kết thúc sinh câu trả lời (`stream_detector.py`):**
    - **Lớp 1 (UI Button State):** Nút `Stop generating` biến mất hoàn toàn và nút `Send` quay lại trạng thái `enabled`.
