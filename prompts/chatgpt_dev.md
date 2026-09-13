@@ -16,3 +16,16 @@ Nhiệm vụ của bạn:
 [BRANCH: ai-agent/<tên_branch>]
 [ERROR_DETAILS]: <Chi tiết lỗi>
 [ATTEMPT_COUNT]: 1
+
+6. Khuyến nghị: Bạn có thể xuất kết quả dưới dạng JSON fenced block chuẩn hóa:
+```json
+{
+  "status": "COMMITTED",
+  "branch": "ai-agent/<tên_branch>",
+  "commit_sha": "<mã_sha_7_ky_tu>",
+  "pr_url": "https://github.com/org/repo/pull/xxx",
+  "summary": "<Tóm tắt thay đổi>",
+  "files": [{"path": "<đường_dẫn>", "action": "create|update|delete"}]
+}
+```
+

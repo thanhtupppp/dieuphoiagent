@@ -21,3 +21,14 @@ Nhiệm vụ của bạn:
 - Nếu code đã hoàn chỉnh và đạt yêu cầu:
 [STATUS: COMPLETED]
 [SUMMARY]: <Tóm tắt kết quả nghiệm thu>
+
+4. Khuyến nghị: Bạn có thể xuất kết quả thẩm định dưới dạng JSON fenced block chuẩn hóa:
+```json
+{
+  "approved": true,
+  "issues": [],
+  "suggestions": ["Góp ý cải tiến nếu có"],
+  "summary": "<Tóm tắt kết quả nghiệm thu>"
+}
+```
+

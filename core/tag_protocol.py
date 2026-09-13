@@ -1,8 +1,13 @@
+import json
 import re
 from enum import Enum
 from typing import Dict, Optional, Union
 
 from pydantic import BaseModel, Field
+
+from core.contracts import DevTaskSpec, ReviewVerdict, TaskResult
+
+JSON_BLOCK = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL)
 
 
 class AgentStatus(str, Enum):
@@ -52,6 +57,9 @@ Payload = Union[
     CompletionPayload,
     CommitReportPayload,
     ErrorReportPayload,
+    TaskResult,
+    ReviewVerdict,
+    DevTaskSpec,
 ]
 
 
@@ -61,6 +69,31 @@ class TagParseResult(BaseModel):
     raw_text: str
     payload: Optional[Payload] = None
     tags: Dict[str, str] = Field(default_factory=dict)
+
+
+def parse_result(text: str) -> Optional[TaskResult]:
+    """Parse TaskResult from a JSON fenced block."""
+    m = JSON_BLOCK.search(text)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1).strip())
+        return TaskResult.model_validate(data)
+    except Exception:
+        return None
+
+
+def parse_review_verdict(text: str) -> Optional[ReviewVerdict]:
+    """Parse ReviewVerdict from a JSON fenced block."""
+    m = JSON_BLOCK.search(text)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1).strip())
+        return ReviewVerdict.model_validate(data)
+    except Exception:
+        return None
+
 
 
 def _extract_tags(text: str) -> Dict[str, str]:
@@ -86,6 +119,84 @@ def _extract_tags(text: str) -> Dict[str, str]:
 
 
 def parse_agent_output(text: str, source: str) -> TagParseResult:
+    m = JSON_BLOCK.search(text)
+    if m:
+        try:
+            raw_json = json.loads(m.group(1).strip())
+            if isinstance(raw_json, dict):
+                if "approved" in raw_json:
+                    verdict = ReviewVerdict.model_validate(raw_json)
+                    st = AgentStatus.COMPLETED if verdict.approved else AgentStatus.NEEDS_REVISION
+                    summary = verdict.summary or (", ".join(verdict.issues) if verdict.issues else "Review complete")
+                    return TagParseResult(
+                        status=st,
+                        source=source,
+                        raw_text=text,
+                        payload=verdict,
+                        tags={"STATUS": st.value, "SUMMARY": summary},
+                    )
+
+                status_raw = str(raw_json.get("status", "")).upper()
+                if status_raw:
+                    try:
+                        st = AgentStatus(status_raw)
+                    except ValueError:
+                        st = AgentStatus.UNKNOWN
+
+                    if st == AgentStatus.COMPLETED:
+                        return TagParseResult(
+                            status=st,
+                            source=source,
+                            raw_text=text,
+                            payload=CompletionPayload(summary=str(raw_json.get("summary", text))),
+                            tags={"STATUS": st.value, "SUMMARY": str(raw_json.get("summary", text))},
+                        )
+
+                    if st in (AgentStatus.COMMITTED, AgentStatus.READY_FOR_DEV, AgentStatus.NEEDS_REVISION, AgentStatus.UNKNOWN):
+                        task_res = TaskResult.model_validate(raw_json)
+                        eff_status = st if st != AgentStatus.UNKNOWN else AgentStatus.COMMITTED
+                        return TagParseResult(
+                            status=eff_status,
+                            source=source,
+                            raw_text=text,
+                            payload=task_res,
+                            tags={
+                                "STATUS": eff_status.value,
+                                "BRANCH": task_res.branch,
+                                "COMMIT_SHA": task_res.commit_sha,
+                                "PR_URL": task_res.pr_url,
+                                "SUMMARY": task_res.summary,
+                            },
+                        )
+
+                if "summary" in raw_json and (
+                    "files" in raw_json
+                    or "questions" in raw_json
+                    or "pr_url" in raw_json
+                    or "commit_sha" in raw_json
+                ):
+                    task_res = TaskResult.model_validate(raw_json)
+                    eff_status = (
+                        AgentStatus.COMMITTED
+                        if (task_res.commit_sha or task_res.pr_url or task_res.files)
+                        else AgentStatus.READY_FOR_DEV
+                    )
+                    return TagParseResult(
+                        status=eff_status,
+                        source=source,
+                        raw_text=text,
+                        payload=task_res,
+                        tags={
+                            "STATUS": eff_status.value,
+                            "BRANCH": task_res.branch,
+                            "COMMIT_SHA": task_res.commit_sha,
+                            "PR_URL": task_res.pr_url,
+                            "SUMMARY": task_res.summary,
+                        },
+                    )
+        except Exception:
+            pass
+
     tags = _extract_tags(text)
     raw_status = tags.get("STATUS", "").upper()
 
