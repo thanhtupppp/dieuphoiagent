@@ -1,0 +1,3 @@
+@echo off
+echo Opening AI Agent Browser Orchestrator in Google Chrome...
+start "" "chrome.exe" http://localhost:8080

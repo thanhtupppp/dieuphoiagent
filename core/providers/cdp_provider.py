@@ -49,10 +49,12 @@ class CdpProvider(AgentProvider):
             raise RuntimeError(f"Tab {site} không sẵn sàng!")
 
         start = time.perf_counter()
+        baseline = await self.detector.get_baseline_state(tab, site)
         await self.detector.send_prompt(tab, request.user_prompt, site)
         raw_response = await self.detector.wait_for_completion(
             tab,
             site,
+            baseline=baseline,
             on_progress=request.on_progress,
         )
         elapsed = time.perf_counter() - start

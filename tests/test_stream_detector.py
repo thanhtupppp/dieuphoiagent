@@ -1,8 +1,9 @@
+import time
 import pytest
 from unittest.mock import AsyncMock
 
 from core.config_loader import AppConfig, SelectorsConfig
-from core.stream_detector import StreamDetector, check_terminal_signal, OBSERVER_JS
+from core.stream_detector import StreamDetector, check_terminal_signal, OBSERVER_JS, TabBaseline
 
 
 def test_check_terminal_signal_tags():
@@ -346,6 +347,146 @@ async def test_wait_for_completion_timeout():
     mock_page.evaluate = AsyncMock(side_effect=fake_evaluate)
     with pytest.raises(TimeoutError):
         await detector.wait_for_completion(mock_page, "chatgpt")
+
+
+@pytest.mark.asyncio
+async def test_get_baseline_state_evaluate_success():
+    config = AppConfig()
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.answer"},
+        chatgpt={"last_response": "div.msg"},
+    )
+    detector = StreamDetector(config, selectors)
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(return_value={"count": 3, "lastText": "Old turn content"})
+
+    baseline = await detector.get_baseline_state(mock_page, "perplexity")
+    assert baseline.response_count == 3
+    assert baseline.last_text == "Old turn content"
+    mock_page.evaluate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_baseline_state_fallback_query_selector_all():
+    config = AppConfig()
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.answer"},
+        chatgpt={"last_response": "div.msg"},
+    )
+    detector = StreamDetector(config, selectors)
+    mock_page = AsyncMock()
+    mock_page.evaluate = AsyncMock(side_effect=Exception("evaluate failed"))
+
+    el1 = AsyncMock()
+    el2 = AsyncMock()
+    el2.inner_text = AsyncMock(return_value="Fallback turn content")
+    mock_page.query_selector_all = AsyncMock(return_value=[el1, el2])
+
+    baseline = await detector.get_baseline_state(mock_page, "chatgpt")
+    assert baseline.response_count == 2
+    assert baseline.last_text == "Fallback turn content"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_completion_ignores_stale_baseline_until_new_response():
+    """Verify that wait_for_completion does not return immediately when DOM contains old completed response."""
+    config = AppConfig(timeout_seconds=8, text_stability_seconds=0.1)
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.answer", "stop_button": "button.stop"},
+        chatgpt={"last_response": "div.msg", "stop_button": "button.stop"},
+    )
+    detector = StreamDetector(config, selectors)
+    mock_page = AsyncMock()
+
+    baseline = TabBaseline(
+        response_count=1,
+        last_text="Old Turn Answer\n[STATUS: READY_FOR_DEV]",
+    )
+
+    call_count = 0
+
+    async def fake_evaluate(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return None  # OBSERVER_JS
+        elif call_count <= 3:
+            # Phase 1: DOM still contains only the old response from baseline
+            return {
+                "text": "Old Turn Answer\n[STATUS: READY_FOR_DEV]",
+                "count": 1,
+                "hasStop": False,
+                "hasAction": True,
+                "isTool": False,
+            }
+        elif call_count == 4:
+            # AI begins generating: stop button appears
+            return {
+                "text": "Thinking about next steps...",
+                "count": 2,
+                "hasStop": True,
+                "hasAction": False,
+                "isTool": False,
+            }
+        else:
+            # Phase 2: Generation finished with new text
+            return {
+                "text": "New Turn Answer Finished\n[STATUS: COMPLETED]",
+                "count": 2,
+                "hasStop": False,
+                "hasAction": True,
+                "isTool": False,
+            }
+
+    mock_page.evaluate = AsyncMock(side_effect=fake_evaluate)
+    progress_log = []
+    result = await detector.wait_for_completion(
+        mock_page,
+        "perplexity",
+        baseline=baseline,
+        on_progress=lambda m: progress_log.append(m),
+    )
+    # Must NOT be the old turn answer!
+    assert "New Turn Answer Finished" in result
+    assert "[STATUS: COMPLETED]" in result
+    assert "Old Turn Answer" not in result
+    assert any("đã bắt đầu sinh phản hồi" in m for m in progress_log)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_completion_phase1_timeout_retriggers_enter(monkeypatch):
+    config = AppConfig(timeout_seconds=2, text_stability_seconds=0.1)
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.answer", "stop_button": "button.stop"},
+        chatgpt={"last_response": "div.msg", "stop_button": "button.stop"},
+    )
+    detector = StreamDetector(config, selectors)
+    mock_page = AsyncMock()
+    mock_page.keyboard = AsyncMock()
+    mock_page.evaluate = AsyncMock(return_value={
+        "text": "old text",
+        "count": 1,
+        "hasStop": False,
+        "hasAction": True,
+        "isTool": False,
+    })
+    baseline = TabBaseline(response_count=1, last_text="old text")
+
+    real_time = time.time
+    call = 0
+
+    def fake_time():
+        nonlocal call
+        call += 1
+        return real_time() + (call * 3.0)
+
+    monkeypatch.setattr(time, "time", fake_time)
+
+    with pytest.raises(TimeoutError):
+        await detector.wait_for_completion(mock_page, "perplexity", baseline=baseline)
+
+    assert mock_page.keyboard.press.called
+    mock_page.keyboard.press.assert_called_with("Enter")
 
 
 @pytest.mark.live

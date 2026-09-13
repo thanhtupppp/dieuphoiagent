@@ -5,6 +5,7 @@ import pytest
 from core.config_loader import AppConfig
 from core.providers.base import AgentRequest, AgentRole, ProviderKind
 from core.providers.cdp_provider import CdpProvider
+from core.stream_detector import TabBaseline
 
 
 @pytest.fixture
@@ -39,7 +40,10 @@ async def test_cdp_provider_ensures_tabs_and_sends_to_tech_lead(provider):
         perplexity_tab, "review this", "perplexity"
     )
     provider.detector.wait_for_completion.assert_awaited_once_with(
-        perplexity_tab, "perplexity", on_progress=progress
+        perplexity_tab,
+        "perplexity",
+        baseline=TabBaseline(response_count=0, last_text=""),
+        on_progress=progress,
     )
     assert response.content == "[STATUS: READY_FOR_DEV] result"
     assert response.elapsed_s >= 0
@@ -66,7 +70,10 @@ async def test_cdp_provider_routes_core_dev_to_chatgpt(provider):
         chatgpt_tab, "implement this", "chatgpt"
     )
     provider.detector.wait_for_completion.assert_awaited_once_with(
-        chatgpt_tab, "chatgpt", on_progress=None
+        chatgpt_tab,
+        "chatgpt",
+        baseline=TabBaseline(response_count=0, last_text=""),
+        on_progress=None,
     )
     assert response.content == "[STATUS: COMMITTED] result"
 

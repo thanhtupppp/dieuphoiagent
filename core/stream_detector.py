@@ -1,7 +1,8 @@
 import asyncio
 import time
 import re
-from typing import Optional, Callable, Tuple
+from dataclasses import dataclass
+from typing import Optional, Callable, Tuple, Any
 from playwright.async_api import Page
 from core.config_loader import AppConfig, SelectorsConfig
 
@@ -25,6 +26,12 @@ OBSERVER_JS = """
   });
 })();
 """
+
+
+@dataclass
+class TabBaseline:
+    response_count: int = 0
+    last_text: str = ""
 
 
 def check_terminal_signal(text: str, agent_type: str) -> Tuple[bool, str]:
@@ -103,6 +110,140 @@ class StreamDetector:
                 return False
         return False
 
+    async def get_baseline_state(self, page: Page, agent_type: str) -> TabBaseline:
+        """Capture the response count and last response text before submitting a new turn."""
+        s_cfg = self.selectors.perplexity if agent_type == "perplexity" else self.selectors.chatgpt
+        s_resp = s_cfg.get("last_response")
+
+        if not s_resp:
+            return TabBaseline(response_count=0, last_text="")
+
+        if hasattr(page, "evaluate"):
+            try:
+                res = await page.evaluate("""(selector) => {
+                    const els = document.querySelectorAll(selector);
+                    const count = els.length;
+                    const lastText = count > 0 ? (els[count - 1].innerText || '').trim() : '';
+                    return { count, lastText };
+                }""", s_resp)
+                if isinstance(res, dict):
+                    return TabBaseline(
+                        response_count=int(res.get("count", 0)),
+                        last_text=str(res.get("lastText", "")),
+                    )
+            except Exception:
+                pass
+
+        if hasattr(page, "query_selector_all"):
+            try:
+                els = await page.query_selector_all(s_resp)
+                count = len(els)
+                last_text = ""
+                if count > 0:
+                    raw = els[-1].inner_text()
+                    last_text = (await raw if asyncio.iscoroutine(raw) else raw).strip()
+                return TabBaseline(response_count=count, last_text=last_text)
+            except Exception:
+                pass
+
+        return TabBaseline(response_count=0, last_text="")
+
+    async def _get_dom_state(
+        self,
+        page: Page,
+        s_resp: Optional[str],
+        s_stop: Optional[str],
+        s_action: Optional[str],
+        s_tool: Optional[str],
+    ) -> dict[str, Any]:
+        """Query the DOM once to collect response text, counts, and interactive control states."""
+        dom_state: dict[str, Any] = {}
+        if hasattr(page, "evaluate"):
+            try:
+                dom_state = await page.evaluate("""(cfg) => {
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const s = window.getComputedStyle(el);
+                        return s.display !== 'none' && s.visibility !== 'hidden' && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0);
+                    };
+
+                    let text = '';
+                    let count = 0;
+                    if (cfg.resp) {
+                        const respEls = document.querySelectorAll(cfg.resp);
+                        count = respEls.length;
+                        if (count > 0) {
+                            const last = respEls[count - 1];
+                            text = last.innerText || '';
+                        }
+                    }
+                    
+                    let hasStop = false;
+                    if (cfg.stop) {
+                        const stopEls = document.querySelectorAll(cfg.stop);
+                        for (let i = 0; i < stopEls.length; i++) {
+                            if (isVisible(stopEls[i])) {
+                                hasStop = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    let hasAction = false;
+                    if (cfg.action) {
+                        const actEls = document.querySelectorAll(cfg.action);
+                        for (let i = 0; i < actEls.length; i++) {
+                            if (isVisible(actEls[i])) {
+                                hasAction = true;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    let isTool = false;
+                    if (cfg.tool) {
+                        const toolEls = document.querySelectorAll(cfg.tool);
+                        for (let i = 0; i < toolEls.length; i++) {
+                            if (isVisible(toolEls[i])) {
+                                isTool = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    return { text, count, hasStop, hasAction, isTool };
+                }""", {
+                    "resp": s_resp,
+                    "stop": s_stop,
+                    "action": s_action,
+                    "tool": s_tool
+                })
+            except Exception:
+                pass
+
+        if not isinstance(dom_state, dict) or not dom_state:
+            dom_state = {}
+            if hasattr(page, "query_selector_all") and s_resp:
+                try:
+                    elements = await page.query_selector_all(s_resp)
+                    dom_state["count"] = len(elements)
+                    if elements:
+                        raw_t = elements[-1].inner_text()
+                        dom_state["text"] = await raw_t if asyncio.iscoroutine(raw_t) else raw_t
+                    if s_stop and hasattr(page, "is_visible"):
+                        raw_vis = page.is_visible(s_stop)
+                        dom_state["hasStop"] = await raw_vis if asyncio.iscoroutine(raw_vis) else raw_vis
+                    if s_tool and hasattr(page, "is_visible"):
+                        raw_tool = page.is_visible(s_tool)
+                        dom_state["isTool"] = await raw_tool if asyncio.iscoroutine(raw_tool) else raw_tool
+                    if s_action and hasattr(page, "is_visible"):
+                        raw_act = page.is_visible(s_action)
+                        dom_state["hasAction"] = await raw_act if asyncio.iscoroutine(raw_act) else raw_act
+                except Exception:
+                    pass
+
+        return dom_state
+
     async def send_prompt(self, page: Page, text: str, agent_type: str):
         if agent_type == "perplexity":
             s_input = self.selectors.perplexity["input_textarea"]
@@ -131,7 +272,24 @@ class StreamDetector:
                     await el.focus()
                 except Exception:
                     pass
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.1)
+
+            # Clear draft text if any
+            if hasattr(page, "evaluate"):
+                try:
+                    await page.evaluate("""(selector) => {
+                        const target = document.querySelector(selector);
+                        if (!target) return;
+                        if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
+                            target.value = '';
+                        } else if (target.isContentEditable) {
+                            target.innerText = '';
+                            target.innerHTML = '';
+                        }
+                        target.dispatchEvent(new Event('input', { bubbles: true }));
+                    }""", s_input)
+                except Exception:
+                    pass
 
             inserted = False
             if hasattr(page, "evaluate"):
@@ -149,13 +307,15 @@ class StreamDetector:
                                 cancelable: true
                             });
                             target.dispatchEvent(ev);
-                            if ((target.innerText || target.textContent || '').trim().length > 0) {
+                            if ((target.innerText || target.textContent || target.value || '').trim().length > 0) {
+                                target.dispatchEvent(new Event('input', { bubbles: true }));
                                 return true;
                             }
                         } catch (e) {}
 
                         try {
                             if (document.execCommand('insertText', false, content)) {
+                                target.dispatchEvent(new Event('input', { bubbles: true }));
                                 return true;
                             }
                         } catch (e) {}
@@ -180,9 +340,24 @@ class StreamDetector:
         if hasattr(page, "query_selector") and s_send:
             try:
                 btn = await page.query_selector(s_send)
-                if btn and await btn.is_visible():
-                    await btn.click(force=True, timeout=5000)
-                    submitted = True
+                if btn:
+                    is_vis = True
+                    if hasattr(btn, "is_visible"):
+                        vis_val = btn.is_visible()
+                        is_vis = bool(await vis_val if asyncio.iscoroutine(vis_val) else vis_val)
+                    if is_vis:
+                        is_disabled = False
+                        if hasattr(btn, "is_disabled") and callable(btn.is_disabled):
+                            try:
+                                dis_val = btn.is_disabled()
+                                dis_res = await dis_val if asyncio.iscoroutine(dis_val) else dis_val
+                                if isinstance(dis_res, bool):
+                                    is_disabled = dis_res
+                            except Exception:
+                                pass
+                        if not is_disabled and hasattr(btn, "click"):
+                            await btn.click(force=True, timeout=5000)
+                            submitted = True
             except Exception:
                 pass
 
@@ -193,6 +368,7 @@ class StreamDetector:
         self,
         page: Page,
         agent_type: str,
+        baseline: Optional[TabBaseline] = None,
         on_progress: Optional[Callable[[str], None]] = None,
     ) -> str:
         s_cfg = self.selectors.perplexity if agent_type == "perplexity" else self.selectors.chatgpt
@@ -210,11 +386,52 @@ class StreamDetector:
         if observer_active and on_progress:
             on_progress("Đã kích hoạt MutationObserver giám sát sự kiện DOM.")
 
-        await asyncio.sleep(1.0)
+        # --- PHASE 1: Wait for generation to start (if baseline is provided) ---
+        generation_started = baseline is None
+        phase1_start = time.time()
+        phase1_timeout = 15.0
+        retriggered_enter = False
 
+        while not generation_started and (time.time() - phase1_start < phase1_timeout):
+            await asyncio.sleep(0.5)
+            now = time.time()
+            elapsed_p1 = int(now - phase1_start)
+
+            state = await self._get_dom_state(page, s_resp, s_stop, s_action, s_tool)
+            current_text = state.get("text", "").strip()
+            stop_visible = state.get("hasStop", False)
+            is_tool = state.get("isTool", False)
+            resp_count = state.get("count", 0)
+
+            if stop_visible or is_tool:
+                generation_started = True
+            elif baseline and resp_count > baseline.response_count:
+                generation_started = True
+            elif baseline and current_text and (current_text != baseline.last_text.strip()):
+                generation_started = True
+
+            if generation_started:
+                if on_progress:
+                    on_progress(f"{agent_type.capitalize()} đã bắt đầu sinh phản hồi...")
+                break
+
+            if not retriggered_enter and (now - phase1_start >= 5.0):
+                retriggered_enter = True
+                if on_progress:
+                    on_progress(f"Chưa thấy phản hồi, thử gửi lại tín hiệu Enter vào {agent_type.capitalize()}...")
+                if hasattr(page, "keyboard"):
+                    try:
+                        await page.keyboard.press("Enter")
+                    except Exception:
+                        pass
+
+            if on_progress and int(now - phase1_start) > 0 and int(now - phase1_start) % 4 == 0:
+                on_progress(f"Đang chờ {agent_type.capitalize()} tiếp nhận yêu cầu... ({elapsed_p1}s)")
+
+        # --- PHASE 2: Wait for generation to complete ---
         last_text = ""
         stable_start: Optional[float] = None
-        last_progress_time = start_time
+        last_progress_time = time.time()
         detected_terminal_tag = False
         terminal_status_name = ""
 
@@ -222,86 +439,28 @@ class StreamDetector:
             now = time.time()
             elapsed = int(now - start_time)
 
-            dom_state = {}
-            if hasattr(page, "evaluate"):
-                try:
-                    dom_state = await page.evaluate("""(cfg) => {
-                        const isVisible = (el) => {
-                            if (!el) return false;
-                            const s = window.getComputedStyle(el);
-                            return s.display !== 'none' && s.visibility !== 'hidden' && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0);
-                        };
-
-                        let text = '';
-                        if (cfg.resp) {
-                            const respEls = document.querySelectorAll(cfg.resp);
-                            if (respEls.length > 0) {
-                                const last = respEls[respEls.length - 1];
-                                text = last.innerText || '';
-                            }
-                        }
-                        
-                        let hasStop = false;
-                        if (cfg.stop) {
-                            const stopEl = document.querySelector(cfg.stop);
-                            hasStop = isVisible(stopEl);
-                        }
-                        
-                        let hasAction = false;
-                        if (cfg.action) {
-                            const actEls = document.querySelectorAll(cfg.action);
-                            for (let i = 0; i < actEls.length; i++) {
-                                if (isVisible(actEls[i])) {
-                                    hasAction = true;
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        let isTool = false;
-                        if (cfg.tool) {
-                            const toolEl = document.querySelector(cfg.tool);
-                            isTool = isVisible(toolEl);
-                        }
-
-                        return { text, hasStop, hasAction, isTool };
-                    }""", {
-                        "resp": s_resp,
-                        "stop": s_stop,
-                        "action": s_action,
-                        "tool": s_tool
-                    })
-                except Exception:
-                    pass
-
-            if not isinstance(dom_state, dict) or not dom_state:
-                dom_state = {}
-                if hasattr(page, "query_selector_all") and s_resp:
-                    try:
-                        elements = await page.query_selector_all(s_resp)
-                        if elements:
-                            raw_t = elements[-1].inner_text()
-                            dom_state["text"] = await raw_t if asyncio.iscoroutine(raw_t) else raw_t
-                        if s_stop and hasattr(page, "is_visible"):
-                            raw_vis = page.is_visible(s_stop)
-                            dom_state["hasStop"] = await raw_vis if asyncio.iscoroutine(raw_vis) else raw_vis
-                        if s_tool and hasattr(page, "is_visible"):
-                            raw_tool = page.is_visible(s_tool)
-                            dom_state["isTool"] = await raw_tool if asyncio.iscoroutine(raw_tool) else raw_tool
-                    except Exception:
-                        pass
-
+            dom_state = await self._get_dom_state(page, s_resp, s_stop, s_action, s_tool)
             current_text = dom_state.get("text", "")
             stop_visible = dom_state.get("hasStop", False)
             has_action_buttons = dom_state.get("hasAction", False)
             is_tool_running = dom_state.get("isTool", False)
+            resp_count = dom_state.get("count", 0)
 
-            is_terminal, status_label = check_terminal_signal(current_text, agent_type)
-            if is_terminal and not detected_terminal_tag:
-                detected_terminal_tag = True
-                terminal_status_name = status_label
-                if on_progress:
-                    on_progress(f"Đã phát hiện tín hiệu hoàn tất [{status_label}]. Đang thẩm định tín hiệu kết thúc...")
+            # Prevent false immediate completion on stale baseline content
+            is_new_content = True
+            if baseline is not None:
+                if resp_count <= baseline.response_count and current_text.strip() == baseline.last_text.strip():
+                    is_new_content = False
+
+            if is_new_content and current_text:
+                is_terminal, status_label = check_terminal_signal(current_text, agent_type)
+                if is_terminal and not detected_terminal_tag:
+                    detected_terminal_tag = True
+                    terminal_status_name = status_label
+                    if on_progress:
+                        on_progress(f"Đã phát hiện tín hiệu hoàn tất [{status_label}]. Đang thẩm định tín hiệu kết thúc...")
+            else:
+                is_terminal, status_label = False, ""
 
             if on_progress and (now - last_progress_time >= 5.0):
                 last_progress_time = now
@@ -333,7 +492,7 @@ class StreamDetector:
 
             signals_met = sum([sig_dom_quiet, sig_button_ready, sig_protocol])
 
-            if signals_met >= 2 and current_text:
+            if signals_met >= 2 and current_text and is_new_content:
                 if on_progress:
                     sig_desc = []
                     if sig_dom_quiet:
@@ -348,4 +507,3 @@ class StreamDetector:
             await asyncio.sleep(1.0)
 
         raise TimeoutError(f"{agent_type.capitalize()} response timed out after {timeout} seconds")
-
