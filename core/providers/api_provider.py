@@ -3,6 +3,7 @@ import time
 from typing import Any, Optional
 
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageParam
 
 from .base import AgentProvider, AgentRequest, AgentResponse, AgentRole, ProviderKind
 
@@ -52,7 +53,7 @@ class ApiProvider(AgentProvider):
         if request.on_progress:
             request.on_progress(f"Gửi yêu cầu tới mô hình {model} qua API...")
 
-        messages: list[dict[str, str]] = []
+        messages: list[ChatCompletionMessageParam] = []
         if request.system_prompt:
             messages.append({"role": "system", "content": request.system_prompt})
         messages.append({"role": "user", "content": request.user_prompt})
@@ -60,7 +61,7 @@ class ApiProvider(AgentProvider):
         start = time.perf_counter()
         resp = await self._client.chat.completions.create(
             model=model,
-            messages=messages,  # type: ignore[arg-type]
+            messages=messages,
             timeout=request.timeout_s,
         )
         elapsed = time.perf_counter() - start
