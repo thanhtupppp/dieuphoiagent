@@ -37,10 +37,12 @@ def test_factory_builds_cdp_provider():
     assert provider.__class__.__name__ == "CdpProvider"
 
 
-def test_factory_builds_api_provider():
+def test_factory_builds_api_provider(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "mock-key")
     provider = build_provider(ProviderKind.API)
     assert provider.kind is ProviderKind.API
     assert provider.__class__.__name__ == "ApiProvider"
+
 
 
 def test_factory_rejects_unsupported_provider():
