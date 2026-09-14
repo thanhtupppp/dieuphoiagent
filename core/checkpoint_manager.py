@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -7,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from core.config_loader import SelectorsConfig
 from core.tag_protocol import AgentStatus, parse_agent_output
@@ -44,9 +45,10 @@ _SECRET_SUFFIXES = (
 
 _SECRET_KEY_VALUE_PATTERNS = (
     re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+"),
+    re.compile(r"(?i)(\bbearer\s+)[^\s,;]+"),
     re.compile(
         r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token)"
-        r"\s*[:=]\s*)[^\s,;]+"
+        r"\s*[:=]\s*)[^\s,;&?#]+"
     ),
     re.compile(r"(?i)((?:cookie|set-cookie)\s*[:=]\s*)[^\r\n]+"),
 )
@@ -54,6 +56,9 @@ _SECRET_KEY_VALUE_PATTERNS = (
 _SECRET_STANDALONE_PATTERNS = (
     re.compile(r"(?i)\bsk-[A-Za-z0-9_-]{16,}"),
     re.compile(r"(?i)\bghp_[A-Za-z0-9]{30,}"),
+    re.compile(r"(?i)\bgithub_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"(?i)\bxoxb-[A-Za-z0-9-]+"),
+    re.compile(r"(?i)\bxoxp-[A-Za-z0-9-]+"),
 )
 
 AgentName = Literal["perplexity", "chatgpt", "none"]
@@ -135,23 +140,33 @@ def save_checkpoint(checkpoint: TaskCheckpoint, path: str = "storage/checkpoint.
     destination.parent.mkdir(parents=True, exist_ok=True)
     payload = redact_secrets(checkpoint.model_dump())
 
-    fd, temp_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        dir=destination.parent,
+    )
     temp_path = Path(temp_name)
+    fd_owned = True
     try:
         _secure_permissions(temp_path)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            fd_owned = False
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+            file.flush()
+            os.fsync(file.fileno())
         _secure_permissions(temp_path)
         os.replace(temp_path, destination)
         _secure_permissions(destination)
     finally:
-        if temp_path.exists():
+        if fd_owned:
             try:
-                temp_path.unlink()
+                os.close(fd)
             except OSError:
                 pass
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def load_checkpoint(path: str = "storage/checkpoint.json") -> Optional[TaskCheckpoint]:
@@ -162,11 +177,14 @@ def load_checkpoint(path: str = "storage/checkpoint.json") -> Optional[TaskCheck
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
         return TaskCheckpoint.model_validate(data)
-    except json.JSONDecodeError:
-        logger.exception("Checkpoint JSON bị hỏng: %s", p)
+    except json.JSONDecodeError as exc:
+        logger.error("Checkpoint JSON bị hỏng: %s (%s)", p, exc)
         return None
-    except Exception:
-        logger.exception("Không thể validate checkpoint: %s", p)
+    except ValidationError as exc:
+        logger.error("Checkpoint không hợp lệ: %s (%s)", p, exc)
+        return None
+    except Exception as exc:
+        logger.error("Không thể đọc checkpoint: %s (%s)", p, exc)
         return None
 
 
@@ -182,6 +200,13 @@ def clear_checkpoint(path: str = "storage/checkpoint.json") -> None:
 def has_active_checkpoint(path: str = "storage/checkpoint.json") -> bool:
     cp = load_checkpoint(path)
     return cp is not None and bool(cp.repo)
+
+
+def _normalize_loop_count(current_loop_count: int, max_loops: int) -> tuple[int, int]:
+    """Ensures loop_count and max_loops are strictly within valid bounds."""
+    normalized_max_loops = max(1, max_loops)
+    normalized_current = max(0, current_loop_count)
+    return min(normalized_current, normalized_max_loops), normalized_max_loops
 
 
 async def _read_last_parseable_response(
@@ -205,7 +230,12 @@ async def _read_last_parseable_response(
             if parsed is not None and parsed.status != AgentStatus.UNKNOWN:
                 return text, parsed
     except Exception:
-        pass
+        logger.debug(
+            "Không thể đọc response từ tab source=%s selector=%s",
+            source,
+            selector,
+            exc_info=True,
+        )
     return "", None
 
 
@@ -224,6 +254,12 @@ async def reconcile_from_tabs(
     Inspects existing browser tabs (Perplexity & ChatGPT), analyzes their current messages,
     and automatically reconstructs an accurate TaskCheckpoint to resume directly without restarting.
     """
+    safe_loop_count, safe_max_loops = _normalize_loop_count(
+        current_loop_count,
+        max_loops,
+    )
+    active_loop_count = min(safe_max_loops, max(1, safe_loop_count))
+
     s_p_resp = selectors.perplexity.get("last_response")
     s_c_resp = selectors.chatgpt.get("last_response")
 
@@ -239,19 +275,33 @@ async def reconcile_from_tabs(
     except Exception:
         c_dev_template = ""
 
+    # Check if ChatGPT has valid committed evidence
+    has_commit_evidence = False
+    feat_branch = ""
+    commit_sha = ""
+    pr_url = ""
     if c_res and c_res.status == AgentStatus.COMMITTED:
         pl = c_res.payload
-        feat_branch = getattr(pl, "branch", "")
-        commit_sha = getattr(pl, "commit_sha", "")
-        pr_url = getattr(pl, "pr_url", "")
+        feat_branch = getattr(pl, "branch", "") or c_res.tags.get("BRANCH", "")
+        commit_sha = getattr(pl, "commit_sha", "") or c_res.tags.get("COMMIT_SHA", "")
+        pr_url = getattr(pl, "pr_url", "") or c_res.tags.get("PR_URL", "")
+        payload_repo = getattr(pl, "repo", "") or c_res.tags.get("REPO", "")
+        if not payload_repo and pr_url and "github.com/" in pr_url:
+            parts = pr_url.split("github.com/")[-1].split("/")
+            if len(parts) >= 2:
+                payload_repo = f"{parts[0]}/{parts[1]}"
+        has_commit_evidence = bool(feat_branch or commit_sha or pr_url)
+        if payload_repo and repo and payload_repo.strip().lower() != repo.strip().lower():
+            has_commit_evidence = False
 
+    if c_res and c_res.status == AgentStatus.COMMITTED and has_commit_evidence:
         if p_res and p_res.status == AgentStatus.COMPLETED:
             return TaskCheckpoint(
                 repo=repo,
                 branch=branch,
                 goal=goal,
-                loop_count=max(1, current_loop_count),
-                max_loops=max_loops,
+                loop_count=active_loop_count,
+                max_loops=safe_max_loops,
                 auto_mode=auto_mode,
                 last_successful_agent="perplexity",
                 next_target_agent="none",
@@ -262,17 +312,35 @@ async def reconcile_from_tabs(
                 status_label="COMPLETED",
             )
         if p_res and p_res.status == AgentStatus.NEEDS_REVISION:
+            if safe_loop_count >= safe_max_loops:
+                return TaskCheckpoint(
+                    repo=repo,
+                    branch=branch,
+                    goal=goal,
+                    loop_count=safe_max_loops,
+                    max_loops=safe_max_loops,
+                    auto_mode=auto_mode,
+                    last_successful_agent="perplexity",
+                    next_target_agent="none",
+                    feature_branch=feat_branch,
+                    commit_sha=commit_sha,
+                    pr_url=pr_url,
+                    last_raw_response=p_text,
+                    next_prompt_payload="",
+                    status_label="MAX_LOOPS_REACHED",
+                )
+
+            next_loop_count = min(safe_max_loops, max(2, safe_loop_count + 1))
             next_payload = (
                 f"[BÁO CÁO SỰ CỐ / YÊU CẦU SỬA ĐỔI TỪ LEAD]:\n{p_text}\n"
                 f"Hãy chỉnh sửa mã nguồn và commit cập nhật lên nhánh {feat_branch}."
             )
-            target_loop = max(2, current_loop_count + 1) if current_loop_count > 0 else 2
             return TaskCheckpoint(
                 repo=repo,
                 branch=branch,
                 goal=goal,
-                loop_count=min(max_loops, target_loop),
-                max_loops=max_loops,
+                loop_count=next_loop_count,
+                max_loops=safe_max_loops,
                 auto_mode=auto_mode,
                 last_successful_agent="perplexity",
                 next_target_agent="chatgpt",
@@ -293,8 +361,8 @@ async def reconcile_from_tabs(
             repo=repo,
             branch=branch,
             goal=goal,
-            loop_count=max(1, current_loop_count),
-            max_loops=max_loops,
+            loop_count=active_loop_count,
+            max_loops=safe_max_loops,
             auto_mode=auto_mode,
             last_successful_agent="chatgpt",
             next_target_agent="perplexity",
@@ -312,8 +380,8 @@ async def reconcile_from_tabs(
             repo=repo,
             branch=branch,
             goal=goal,
-            loop_count=max(1, current_loop_count),
-            max_loops=max_loops,
+            loop_count=active_loop_count,
+            max_loops=safe_max_loops,
             auto_mode=auto_mode,
             last_successful_agent="perplexity",
             next_target_agent="chatgpt",
@@ -331,10 +399,40 @@ async def reconcile_from_tabs(
         branch=branch,
         goal=goal,
         loop_count=0,
-        max_loops=max_loops,
+        max_loops=safe_max_loops,
         auto_mode=auto_mode,
         last_successful_agent="",
         next_target_agent="perplexity",
         next_prompt_payload=first_prompt,
         status_label="IDLE",
     )
+
+
+class CheckpointStore:
+    """Coroutine-safe checkpoint manager using asyncio.Lock to avoid lost updates."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+
+    async def save(
+        self,
+        checkpoint: TaskCheckpoint,
+        path: str = "storage/checkpoint.json",
+    ) -> None:
+        async with self._lock:
+            await asyncio.to_thread(save_checkpoint, checkpoint, path)
+
+    async def load(
+        self,
+        path: str = "storage/checkpoint.json",
+    ) -> Optional[TaskCheckpoint]:
+        async with self._lock:
+            return await asyncio.to_thread(load_checkpoint, path)
+
+    async def clear(
+        self,
+        path: str = "storage/checkpoint.json",
+    ) -> None:
+        async with self._lock:
+            await asyncio.to_thread(clear_checkpoint, path)
+
