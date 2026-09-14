@@ -50,10 +50,19 @@ _SECRET_KEY_VALUE_PATTERNS = (
         r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token)"
         r"\s*[:=]\s*)[^\s,;&?#]+"
     ),
-    re.compile(r"(?i)((?:cookie|set-cookie)\s*[:=]\s*)[^\r\n]+"),
+    re.compile(
+        r"(?i)((?:cookie|set-cookie)\s*[:=]\s*)"
+        r"(?=[^\r\n]*(?:session|token|auth|sid))"
+        r"[^\r\n]+"
+    ),
 )
 
 _SECRET_STANDALONE_PATTERNS = (
+    re.compile(
+        r"(?i)\beyJ[A-Za-z0-9_-]{10,}\."
+        r"[A-Za-z0-9_-]{10,}\."
+        r"[A-Za-z0-9_-]{10,}\b"
+    ),
     re.compile(r"(?i)\bsk-[A-Za-z0-9_-]{16,}"),
     re.compile(r"(?i)\bghp_[A-Za-z0-9]{30,}"),
     re.compile(r"(?i)\bgithub_pat_[A-Za-z0-9_]{20,}"),
@@ -157,6 +166,15 @@ def save_checkpoint(checkpoint: TaskCheckpoint, path: str = "storage/checkpoint.
         _secure_permissions(temp_path)
         os.replace(temp_path, destination)
         _secure_permissions(destination)
+        if os.name != "nt":
+            try:
+                dir_fd = os.open(str(destination.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass
     finally:
         if fd_owned:
             try:
@@ -177,14 +195,14 @@ def load_checkpoint(path: str = "storage/checkpoint.json") -> Optional[TaskCheck
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
         return TaskCheckpoint.model_validate(data)
-    except json.JSONDecodeError as exc:
-        logger.error("Checkpoint JSON bị hỏng: %s (%s)", p, exc)
+    except json.JSONDecodeError:
+        logger.error("Checkpoint JSON bị hỏng: %s", p)
         return None
-    except ValidationError as exc:
-        logger.error("Checkpoint không hợp lệ: %s (%s)", p, exc)
+    except ValidationError:
+        logger.error("Checkpoint không hợp lệ: %s", p)
         return None
     except Exception as exc:
-        logger.error("Không thể đọc checkpoint: %s (%s)", p, exc)
+        logger.error("Không thể đọc checkpoint: %s (%s)", p, type(exc).__name__)
         return None
 
 
@@ -239,6 +257,45 @@ async def _read_last_parseable_response(
     return "", None
 
 
+def _checkpoint(
+    *,
+    repo: str,
+    branch: str,
+    goal: str,
+    loop_count: int,
+    max_loops: int,
+    auto_mode: bool,
+    last_successful_agent: LastAgentName,
+    next_target_agent: AgentName,
+    status_label: str,
+    feature_branch: str = "",
+    commit_sha: str = "",
+    pr_url: str = "",
+    last_prompt: str = "",
+    last_raw_response: str = "",
+    next_prompt_payload: str = "",
+    error_message: str = "",
+) -> TaskCheckpoint:
+    return TaskCheckpoint(
+        repo=repo,
+        branch=branch,
+        goal=goal,
+        loop_count=loop_count,
+        max_loops=max_loops,
+        auto_mode=auto_mode,
+        last_successful_agent=last_successful_agent,
+        next_target_agent=next_target_agent,
+        feature_branch=feature_branch,
+        commit_sha=commit_sha,
+        pr_url=pr_url,
+        last_prompt=last_prompt,
+        last_raw_response=last_raw_response,
+        next_prompt_payload=next_prompt_payload,
+        status_label=status_label,
+        error_message=error_message,
+    )
+
+
 async def reconcile_from_tabs(
     p_tab: Any,
     c_tab: Any,
@@ -258,7 +315,7 @@ async def reconcile_from_tabs(
         current_loop_count,
         max_loops,
     )
-    active_loop_count = min(safe_max_loops, max(1, safe_loop_count))
+    completed_loops = safe_loop_count
 
     s_p_resp = selectors.perplexity.get("last_response")
     s_c_resp = selectors.chatgpt.get("last_response")
@@ -296,11 +353,11 @@ async def reconcile_from_tabs(
 
     if c_res and c_res.status == AgentStatus.COMMITTED and has_commit_evidence:
         if p_res and p_res.status == AgentStatus.COMPLETED:
-            return TaskCheckpoint(
+            return _checkpoint(
                 repo=repo,
                 branch=branch,
                 goal=goal,
-                loop_count=active_loop_count,
+                loop_count=completed_loops,
                 max_loops=safe_max_loops,
                 auto_mode=auto_mode,
                 last_successful_agent="perplexity",
@@ -312,8 +369,8 @@ async def reconcile_from_tabs(
                 status_label="COMPLETED",
             )
         if p_res and p_res.status == AgentStatus.NEEDS_REVISION:
-            if safe_loop_count >= safe_max_loops:
-                return TaskCheckpoint(
+            if completed_loops >= safe_max_loops:
+                return _checkpoint(
                     repo=repo,
                     branch=branch,
                     goal=goal,
@@ -330,12 +387,12 @@ async def reconcile_from_tabs(
                     status_label="MAX_LOOPS_REACHED",
                 )
 
-            next_loop_count = min(safe_max_loops, max(2, safe_loop_count + 1))
+            next_loop_count = min(safe_max_loops, completed_loops + 1)
             next_payload = (
                 f"[BÁO CÁO SỰ CỐ / YÊU CẦU SỬA ĐỔI TỪ LEAD]:\n{p_text}\n"
                 f"Hãy chỉnh sửa mã nguồn và commit cập nhật lên nhánh {feat_branch}."
             )
-            return TaskCheckpoint(
+            return _checkpoint(
                 repo=repo,
                 branch=branch,
                 goal=goal,
@@ -352,16 +409,34 @@ async def reconcile_from_tabs(
                 status_label="NEEDS_REVISION",
             )
 
+        if completed_loops >= safe_max_loops:
+            return _checkpoint(
+                repo=repo,
+                branch=branch,
+                goal=goal,
+                loop_count=safe_max_loops,
+                max_loops=safe_max_loops,
+                auto_mode=auto_mode,
+                last_successful_agent="chatgpt",
+                next_target_agent="none",
+                feature_branch=feat_branch,
+                commit_sha=commit_sha,
+                pr_url=pr_url,
+                last_raw_response=c_text,
+                next_prompt_payload="",
+                status_label="MAX_LOOPS_REACHED",
+            )
+
         next_payload = (
             f"[KẾT QUẢ PULL REQUEST TỪ DEV]:\n{c_text}\n"
             "Hãy nghiệm thu mã nguồn này và xuất [STATUS: COMPLETED] nếu đạt chuẩn "
             "hoặc [STATUS: NEEDS_REVISION] nếu cần sửa."
         )
-        return TaskCheckpoint(
+        return _checkpoint(
             repo=repo,
             branch=branch,
             goal=goal,
-            loop_count=active_loop_count,
+            loop_count=completed_loops,
             max_loops=safe_max_loops,
             auto_mode=auto_mode,
             last_successful_agent="chatgpt",
@@ -375,12 +450,27 @@ async def reconcile_from_tabs(
         )
 
     if p_res and p_res.status == AgentStatus.READY_FOR_DEV:
+        if completed_loops >= safe_max_loops:
+            return _checkpoint(
+                repo=repo,
+                branch=branch,
+                goal=goal,
+                loop_count=safe_max_loops,
+                max_loops=safe_max_loops,
+                auto_mode=auto_mode,
+                last_successful_agent="perplexity",
+                next_target_agent="none",
+                last_raw_response=p_text,
+                next_prompt_payload="",
+                status_label="MAX_LOOPS_REACHED",
+            )
+
         chatgpt_prompt = f"{c_dev_template}\n\n[TASK_SPEC FROM TECH LEAD]:\n{p_text}\n\n[TARGET REPO]: {repo}"
-        return TaskCheckpoint(
+        return _checkpoint(
             repo=repo,
             branch=branch,
             goal=goal,
-            loop_count=active_loop_count,
+            loop_count=completed_loops,
             max_loops=safe_max_loops,
             auto_mode=auto_mode,
             last_successful_agent="perplexity",
@@ -394,7 +484,7 @@ async def reconcile_from_tabs(
         f"{p_lead_template}\n\n[MỤC TIÊU BÀI TOÁN]:\nRepository: {repo}\n"
         f"Branch: {branch}\nYêu cầu: {goal}"
     )
-    return TaskCheckpoint(
+    return _checkpoint(
         repo=repo,
         branch=branch,
         goal=goal,

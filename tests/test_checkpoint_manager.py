@@ -67,6 +67,7 @@ async def test_reconcile_from_tabs_chatgpt_committed():
         branch="main",
         goal="Test feature",
         selectors=selectors,
+        current_loop_count=1,
     )
     assert cp.loop_count == 1
     assert cp.last_successful_agent == "chatgpt"
@@ -103,6 +104,7 @@ async def test_reconcile_from_tabs_perplexity_needs_revision():
         branch="main",
         goal="Test feature",
         selectors=selectors,
+        current_loop_count=1,
     )
     assert cp.loop_count == 2
     assert cp.last_successful_agent == "perplexity"
@@ -381,4 +383,126 @@ async def test_checkpoint_store_save_load_clear(tmp_path):
 
     await store.clear(path=cp_file)
     assert await store.load(path=cp_file) is None
+
+
+@pytest.mark.asyncio
+async def test_ready_for_dev_preserves_zero_loop_count():
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.prose"},
+        chatgpt={"last_response": "div.assistant"},
+    )
+    mock_p_tab = AsyncMock()
+    mock_p_el = AsyncMock()
+    mock_p_el.inner_text = AsyncMock(return_value="[STATUS: READY_FOR_DEV]\nBuild feature")
+    mock_p_tab.query_selector_all = AsyncMock(return_value=[mock_p_el])
+    mock_c_tab = AsyncMock()
+    mock_c_tab.query_selector_all = AsyncMock(return_value=[])
+
+    cp = await reconcile_from_tabs(
+        p_tab=mock_p_tab,
+        c_tab=mock_c_tab,
+        repo="owner/repo",
+        branch="main",
+        goal="Build feature",
+        selectors=selectors,
+        max_loops=5,
+        current_loop_count=0,
+    )
+    assert cp.loop_count == 0
+    assert cp.status_label == "READY_FOR_DEV"
+    assert cp.next_target_agent == "chatgpt"
+
+
+@pytest.mark.asyncio
+async def test_ready_for_dev_blocks_when_max_loops_reached():
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.prose"},
+        chatgpt={"last_response": "div.assistant"},
+    )
+    mock_p_tab = AsyncMock()
+    mock_p_el = AsyncMock()
+    mock_p_el.inner_text = AsyncMock(return_value="[STATUS: READY_FOR_DEV]\nBuild feature")
+    mock_p_tab.query_selector_all = AsyncMock(return_value=[mock_p_el])
+    mock_c_tab = AsyncMock()
+    mock_c_tab.query_selector_all = AsyncMock(return_value=[])
+
+    cp = await reconcile_from_tabs(
+        p_tab=mock_p_tab,
+        c_tab=mock_c_tab,
+        repo="owner/repo",
+        branch="main",
+        goal="Build feature",
+        selectors=selectors,
+        max_loops=5,
+        current_loop_count=5,
+    )
+    assert cp.loop_count == 5
+    assert cp.status_label == "MAX_LOOPS_REACHED"
+    assert cp.next_target_agent == "none"
+    assert cp.next_prompt_payload == ""
+
+
+@pytest.mark.asyncio
+async def test_committed_awaiting_review_blocks_when_max_loops_reached():
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.prose"},
+        chatgpt={"last_response": "div.assistant"},
+    )
+    mock_p_tab = AsyncMock()
+    mock_p_tab.query_selector_all = AsyncMock(return_value=[])
+
+    mock_c_tab = AsyncMock()
+    mock_c_el = AsyncMock()
+    mock_c_el.inner_text = AsyncMock(return_value="""
+    [STATUS: COMMITTED]
+    [BRANCH: ai-agent/feature-x]
+    [COMMIT_SHA: 9d7e03b]
+    PR_URL: https://github.com/owner/repo/pull/8
+    """)
+    mock_c_tab.query_selector_all = AsyncMock(return_value=[mock_c_el])
+
+    cp = await reconcile_from_tabs(
+        p_tab=mock_p_tab,
+        c_tab=mock_c_tab,
+        repo="owner/repo",
+        branch="main",
+        goal="Test feature",
+        selectors=selectors,
+        current_loop_count=5,
+        max_loops=5,
+    )
+    assert cp.status_label == "MAX_LOOPS_REACHED"
+    assert cp.loop_count == 5
+    assert cp.next_target_agent == "none"
+    assert cp.next_prompt_payload == ""
+
+
+def test_negative_max_loops_normalized_to_one():
+    from core.checkpoint_manager import _normalize_loop_count
+
+    safe_loop, safe_max = _normalize_loop_count(3, -5)
+    assert safe_max == 1
+    assert safe_loop == 1
+
+
+def test_redacts_standalone_jwt():
+    from core.checkpoint_manager import redact_secrets, _REDACTED
+
+    jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    text = f"User session token is {jwt} in the response."
+    result = redact_secrets(text)
+    assert jwt not in result
+    assert _REDACTED in result
+
+
+def test_cookie_credential_vs_harmless():
+    from core.checkpoint_manager import redact_secrets, _REDACTED
+
+    harmless = "cookie_enabled=true; mode=dark"
+    sensitive = "Set-Cookie: session_id=xyz98765; Secure; HttpOnly"
+    assert redact_secrets(harmless) == harmless
+    redacted_sensitive = redact_secrets(sensitive)
+    assert "xyz98765" not in redacted_sensitive
+    assert _REDACTED in redacted_sensitive
+
 
