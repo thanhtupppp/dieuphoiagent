@@ -414,6 +414,11 @@ async def reconcile_from_tabs(
         payload_repo = getattr(pl, "repo", "") or c_res.tags.get("REPO", "")
         if not payload_repo and pr_url:
             payload_repo = _repo_from_github_url(pr_url)
+        if feat_branch and (commit_sha or pr_url) and not payload_repo:
+            logger.warning(
+                "Commit evidence không có repository để đối chiếu: branch=%s",
+                feat_branch,
+            )
         has_commit_evidence = bool(
             feat_branch
             and (commit_sha or pr_url)
