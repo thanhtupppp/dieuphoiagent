@@ -34,6 +34,7 @@ class RunContext:
     auto_mode: bool = True
     is_running: bool = True
     state: FSMState = FSMState.IDLE
+    timeout_seconds: int = 600
 
     # Task specification
     current_repo: str = ""
@@ -66,12 +67,18 @@ class RunContext:
     def set_state(self, new_state: FSMState) -> None:
         self.state = new_state
         if self.on_state_change:
-            self.on_state_change(new_state)
+            try:
+                self.on_state_change(new_state)
+            except Exception:
+                pass
 
     def log(self, source: str, message: str) -> None:
         self.logs.append({"timestamp": time.time(), "source": source, "message": message})
         if self.on_log:
-            self.on_log(source, message)
+            try:
+                self.on_log(source, message)
+            except Exception:
+                pass
 
     def save_checkpoint(self, cp: Any) -> None:
         if self.save_checkpoint_fn is not None:

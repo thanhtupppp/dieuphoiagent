@@ -100,7 +100,10 @@ class ApprovalHandler(StateHandler):
         context.approval_event.clear()
         if context.on_approval_required:
             p_result = parse_agent_output(context.last_raw_response, source="perplexity")
-            context.on_approval_required("ChatGPT", p_result)
+            try:
+                context.on_approval_required("ChatGPT", p_result)
+            except Exception:
+                context.log("system", "Callback on_approval_required bị lỗi.")
 
         await context.approval_event.wait()
         if not context.is_running:
