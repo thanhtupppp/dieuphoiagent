@@ -10,23 +10,30 @@ async def test_cdp_connector_tab_matching():
     app_config = AppConfig(cdp_url="http://localhost:9222")
     selectors = SelectorsConfig(
         perplexity={"url_match": "perplexity.ai"},
-        chatgpt={"url_match": "chatgpt.com"}
+        chatgpt={"url_match": "chatgpt.com"},
     )
     connector = CDPConnector(app_config, selectors)
 
-    mock_p1 = AsyncMock()
+    mock_p1 = MagicMock()
     mock_p1.url = "https://www.perplexity.ai/search"
-    mock_p2 = AsyncMock()
+    mock_p1.is_closed.return_value = False
+
+    mock_p2 = MagicMock()
     mock_p2.url = "https://chatgpt.com/c/12345"
-    mock_p3 = AsyncMock()
+    mock_p2.is_closed.return_value = False
+
+    mock_p3 = MagicMock()
     mock_p3.url = "https://google.com"
+    mock_p3.is_closed.return_value = False
 
     mock_context = MagicMock()
     mock_context.pages = [mock_p1, mock_p2, mock_p3]
     mock_browser = MagicMock()
     mock_browser.contexts = [mock_context]
+    mock_browser.is_connected.return_value = True
 
     connector.browser = mock_browser
+    connector.is_connected = True
     p_tab, c_tab = await connector.find_tabs()
 
     assert p_tab == mock_p1
@@ -123,7 +130,7 @@ async def test_cdp_connector_reconnect_success():
         return calls == 2
 
     connector.connect = AsyncMock(side_effect=fake_connect)
-    p_mock = AsyncMock()
+    p_mock = MagicMock()
     connector.find_tabs = AsyncMock(return_value=(p_mock, None))
 
     ok = await connector.reconnect()
@@ -148,12 +155,14 @@ async def test_cdp_connector_close():
     selectors = SelectorsConfig(perplexity={}, chatgpt={})
     connector = CDPConnector(app_config, selectors)
 
-    mock_browser = AsyncMock()
+    mock_browser = MagicMock()
+    mock_browser.is_connected.return_value = True
+    mock_browser.close = AsyncMock()
     mock_playwright = AsyncMock()
     connector.browser = mock_browser
     connector.playwright = mock_playwright
     connector.is_connected = True
-    connector.perplexity_tab = AsyncMock()
+    connector.perplexity_tab = MagicMock()
 
     await connector.close()
     assert connector.is_connected is False
@@ -169,11 +178,12 @@ async def test_cdp_connector_open_page_timeout():
     selectors = SelectorsConfig(perplexity={}, chatgpt={})
     connector = CDPConnector(app_config, selectors)
 
-    mock_page = AsyncMock()
-    mock_page.goto.side_effect = PlaywrightTimeoutError("timeout")
+    mock_page = MagicMock()
+    mock_page.goto = AsyncMock(side_effect=PlaywrightTimeoutError("timeout"))
     mock_page.is_closed.return_value = False
+    mock_page.close = AsyncMock()
 
-    mock_context = AsyncMock()
+    mock_context = MagicMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)
 
     res = await connector._open_page(mock_context, "https://test.com")
@@ -185,9 +195,34 @@ def test_cdp_connector_handle_browser_disconnected():
     app_config = AppConfig()
     selectors = SelectorsConfig(perplexity={}, chatgpt={})
     connector = CDPConnector(app_config, selectors)
+    mock_browser = MagicMock()
+    connector.browser = mock_browser
     connector.is_connected = True
     connector.perplexity_tab = MagicMock()
 
-    connector._handle_browser_disconnected()
+    # Disconnected event from a different (stale) browser instance should be ignored
+    stale_browser = MagicMock()
+    connector._handle_browser_disconnected(stale_browser)
+    assert connector.is_connected is True
+
+    # Disconnected event matching current browser resets state
+    connector._handle_browser_disconnected(mock_browser)
     assert connector.is_connected is False
     assert connector.perplexity_tab is None
+
+
+def test_cdp_connector_find_page_aliases():
+    p1 = MagicMock()
+    p1.url = "https://chat.openai.com/c/abc"
+    p2 = MagicMock()
+    p2.url = "https://perplexity.ai"
+
+    # Testing alias resolution for chatgpt
+    found = CDPConnector._find_page([p1, p2], "chatgpt.com")
+    assert found == p1
+
+    found_perplexity = CDPConnector._find_page([p1, p2], "perplexity.ai")
+    assert found_perplexity == p2
+
+    not_found = CDPConnector._find_page([p1, p2], "claude.ai")
+    assert not_found is None

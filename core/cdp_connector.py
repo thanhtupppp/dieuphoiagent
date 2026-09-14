@@ -63,18 +63,21 @@ class CDPConnector:
                 return False
 
     async def find_tabs(self) -> Tuple[Optional[Page], Optional[Page]]:
-        if not self.browser or not self.browser.contexts:
-            logger.warning("find_tabs được gọi khi CDP chưa kết nối hoặc không có context")
+        if not self.connected or not self.browser:
+            logger.warning("CDP chưa kết nối")
+            return None, None
+
+        if not self.browser.contexts:
+            logger.warning("CDP không có browser context")
             return None, None
 
         context = self.browser.contexts[0]
-        p_match = self.selectors.perplexity.get("url_match", "perplexity.ai")
-        c_match = self.selectors.chatgpt.get("url_match", "chatgpt.com")
-
         pages = [
             page for page in context.pages
             if not self._is_page_closed(page)
         ]
+        p_match = self.selectors.perplexity.get("url_match", "perplexity.ai")
+        c_match = self.selectors.chatgpt.get("url_match", "chatgpt.com")
 
         self.perplexity_tab = self._find_page(pages, p_match)
         self.chatgpt_tab = self._find_page(pages, c_match)
@@ -103,7 +106,11 @@ class CDPConnector:
         return False
 
     async def close(self) -> None:
-        """Ngắt kết nối Playwright khỏi session browser CDP từ xa."""
+        """Đóng Playwright connection tới browser CDP.
+
+        Lưu ý: với remote browser, browser.close() sẽ giải phóng Playwright
+        objects và ngắt kết nối khỏi browser server.
+        """
         async with self._lock:
             await self._disconnect()
 
@@ -118,7 +125,8 @@ class CDPConnector:
 
         if browser:
             try:
-                await browser.close()
+                if browser.is_connected():
+                    await browser.close()
             except Exception:
                 logger.exception("Lỗi khi đóng kết nối browser CDP")
 
@@ -130,24 +138,21 @@ class CDPConnector:
 
     @staticmethod
     def _is_page_closed(page: Page) -> bool:
-        if hasattr(page, "is_closed") and callable(page.is_closed):
-            try:
-                res = page.is_closed()
-                if asyncio.iscoroutine(res):
-                    res.close()
-                    return False
-                if isinstance(res, bool):
-                    return res
-            except Exception:
-                pass
-        return False
+        try:
+            return page.is_closed()
+        except Exception:
+            return True
 
     @staticmethod
     def _find_page(pages: list[Page], url_match: str) -> Optional[Page]:
+        match = url_match.lower()
+        aliases = {match}
+        if "chatgpt" in match or "openai" in match:
+            aliases.update({"chatgpt.com", "chat.openai.com"})
         for page in pages:
             try:
-                url = getattr(page, "url", "")
-                if url_match.lower() in url.lower() or ("chatgpt" in url_match.lower() and "chat.openai.com" in url.lower()):
+                url = page.url.lower()
+                if any(alias in url for alias in aliases):
                     return page
             except Exception:
                 continue
@@ -157,29 +162,29 @@ class CDPConnector:
         page: Optional[Page] = None
         timeout = getattr(self.config, "navigation_timeout_ms", 30_000)
         try:
-            if hasattr(context, "new_page"):
-                page = await context.new_page()
-                if hasattr(page, "goto"):
-                    await page.goto(
-                        url,
-                        wait_until="domcontentloaded",
-                        timeout=timeout,
-                    )
-                return page
+            page = await context.new_page()
+            await page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=timeout,
+            )
+            return page
         except PlaywrightTimeoutError:
             logger.warning("Timeout khi mở trang: %s", url)
         except Exception:
             logger.exception("Không thể mở trang: %s", url)
 
         if page and not self._is_page_closed(page):
-            if hasattr(page, "close"):
-                try:
-                    await page.close()
-                except Exception:
-                    pass
+            try:
+                await page.close()
+            except Exception:
+                logger.debug("Không thể đóng page lỗi: %s", url, exc_info=True)
         return None
 
-    def _handle_browser_disconnected(self, _browser: Optional[Browser] = None) -> None:
+    def _handle_browser_disconnected(self, browser: Optional[Browser] = None) -> None:
+        if browser is not None and self.browser is not None and browser is not self.browser:
+            logger.debug("Bỏ qua disconnected event từ instance browser cũ")
+            return
         self.is_connected = False
         self.perplexity_tab = None
         self.chatgpt_tab = None
