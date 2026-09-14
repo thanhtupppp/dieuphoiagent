@@ -33,7 +33,7 @@ class CDPConnector:
         if not (self.is_connected and self.browser):
             return False
         try:
-            return bool(self.browser.is_connected())
+            return self.browser.is_connected()
         except Exception:
             return False
 
