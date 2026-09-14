@@ -1,7 +1,9 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from core.cdp_connector import CDPConnector
 from core.config_loader import AppConfig, SelectorsConfig
+
 
 @pytest.mark.asyncio
 async def test_cdp_connector_tab_matching():
@@ -11,7 +13,7 @@ async def test_cdp_connector_tab_matching():
         chatgpt={"url_match": "chatgpt.com"}
     )
     connector = CDPConnector(app_config, selectors)
-    
+
     mock_p1 = AsyncMock()
     mock_p1.url = "https://www.perplexity.ai/search"
     mock_p2 = AsyncMock()
@@ -23,9 +25,169 @@ async def test_cdp_connector_tab_matching():
     mock_context.pages = [mock_p1, mock_p2, mock_p3]
     mock_browser = MagicMock()
     mock_browser.contexts = [mock_context]
-    
+
     connector.browser = mock_browser
     p_tab, c_tab = await connector.find_tabs()
-    
+
     assert p_tab == mock_p1
     assert c_tab == mock_p2
+
+
+def test_cdp_connector_connected_property():
+    app_config = AppConfig()
+    selectors = SelectorsConfig(perplexity={}, chatgpt={})
+    connector = CDPConnector(app_config, selectors)
+
+    # Initial: False
+    assert connector.connected is False
+
+    # is_connected True but browser None
+    connector.is_connected = True
+    assert connector.connected is False
+
+    # Browser connected
+    mock_browser = MagicMock()
+    mock_browser.is_connected.return_value = True
+    connector.browser = mock_browser
+    assert connector.connected is True
+
+    # Browser throws
+    mock_browser.is_connected.side_effect = Exception("error")
+    assert connector.connected is False
+
+
+@pytest.mark.asyncio
+async def test_cdp_connector_connect_success():
+    app_config = AppConfig()
+    selectors = SelectorsConfig(perplexity={}, chatgpt={})
+    connector = CDPConnector(app_config, selectors)
+
+    mock_browser = MagicMock()
+    mock_browser.contexts = [MagicMock()]
+    mock_browser.is_connected.return_value = True
+
+    mock_playwright = AsyncMock()
+    mock_playwright.chromium.connect_over_cdp = AsyncMock(return_value=mock_browser)
+
+    with patch("core.cdp_connector.async_playwright") as mock_ap:
+        mock_ctx = AsyncMock()
+        mock_ctx.start = AsyncMock(return_value=mock_playwright)
+        mock_ap.return_value = mock_ctx
+
+        ok = await connector.connect()
+        assert ok is True
+        assert connector.is_connected is True
+        assert mock_browser.on.called
+
+        # Calling connect again when already connected
+        ok2 = await connector.connect()
+        assert ok2 is True
+
+
+@pytest.mark.asyncio
+async def test_cdp_connector_connect_no_context():
+    app_config = AppConfig()
+    selectors = SelectorsConfig(perplexity={}, chatgpt={})
+    connector = CDPConnector(app_config, selectors)
+
+    mock_browser = MagicMock()
+    mock_browser.contexts = []  # No contexts!
+
+    mock_playwright = AsyncMock()
+    mock_playwright.chromium.connect_over_cdp = AsyncMock(return_value=mock_browser)
+
+    with patch("core.cdp_connector.async_playwright") as mock_ap:
+        mock_ctx = AsyncMock()
+        mock_ctx.start = AsyncMock(return_value=mock_playwright)
+        mock_ap.return_value = mock_ctx
+
+        ok = await connector.connect()
+        assert ok is False
+        assert connector.is_connected is False
+
+
+@pytest.mark.asyncio
+async def test_cdp_connector_reconnect_success():
+    app_config = AppConfig(reconnect_attempts=2, reconnect_delay_seconds=0.01)
+    selectors = SelectorsConfig(
+        perplexity={"url_match": "perplexity.ai"},
+        chatgpt={"url_match": "chatgpt.com"},
+    )
+    connector = CDPConnector(app_config, selectors)
+
+    calls = 0
+
+    async def fake_connect():
+        nonlocal calls
+        calls += 1
+        return calls == 2
+
+    connector.connect = AsyncMock(side_effect=fake_connect)
+    p_mock = AsyncMock()
+    connector.find_tabs = AsyncMock(return_value=(p_mock, None))
+
+    ok = await connector.reconnect()
+    assert ok is True
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_cdp_connector_reconnect_exhausted():
+    app_config = AppConfig(reconnect_attempts=2, reconnect_delay_seconds=0.01)
+    selectors = SelectorsConfig(perplexity={}, chatgpt={})
+    connector = CDPConnector(app_config, selectors)
+
+    connector.connect = AsyncMock(return_value=False)
+    ok = await connector.reconnect()
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_cdp_connector_close():
+    app_config = AppConfig()
+    selectors = SelectorsConfig(perplexity={}, chatgpt={})
+    connector = CDPConnector(app_config, selectors)
+
+    mock_browser = AsyncMock()
+    mock_playwright = AsyncMock()
+    connector.browser = mock_browser
+    connector.playwright = mock_playwright
+    connector.is_connected = True
+    connector.perplexity_tab = AsyncMock()
+
+    await connector.close()
+    assert connector.is_connected is False
+    assert connector.browser is None
+    assert connector.perplexity_tab is None
+    assert mock_browser.close.called
+    assert mock_playwright.stop.called
+
+
+@pytest.mark.asyncio
+async def test_cdp_connector_open_page_timeout():
+    app_config = AppConfig(navigation_timeout_ms=100)
+    selectors = SelectorsConfig(perplexity={}, chatgpt={})
+    connector = CDPConnector(app_config, selectors)
+
+    mock_page = AsyncMock()
+    mock_page.goto.side_effect = PlaywrightTimeoutError("timeout")
+    mock_page.is_closed.return_value = False
+
+    mock_context = AsyncMock()
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+
+    res = await connector._open_page(mock_context, "https://test.com")
+    assert res is None
+    assert mock_page.close.called
+
+
+def test_cdp_connector_handle_browser_disconnected():
+    app_config = AppConfig()
+    selectors = SelectorsConfig(perplexity={}, chatgpt={})
+    connector = CDPConnector(app_config, selectors)
+    connector.is_connected = True
+    connector.perplexity_tab = MagicMock()
+
+    connector._handle_browser_disconnected()
+    assert connector.is_connected is False
+    assert connector.perplexity_tab is None

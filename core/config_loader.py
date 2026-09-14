@@ -16,6 +16,8 @@ class AppConfig(BaseModel):
     reconnect_delay_seconds: float = 2.0
     browser_path: str = ""
     dedicated_profile_dir: str = "browser_profile"
+    connect_timeout_ms: int = 10_000
+    navigation_timeout_ms: int = 30_000
 
 
 class SelectorsConfig(BaseModel):
