@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core.checkpoint_manager import TaskCheckpoint
+from core.checkpoint_manager import AgentName, LastAgentName, TaskCheckpoint
 from core.fsm.context import FSMState, RunContext
 from core.fsm.states import (
     ApprovalHandler,
@@ -114,6 +114,14 @@ async def run_fsm(
             "Hệ thống đang chờ lệnh cứu hộ: bạn có thể bấm 'Thử lại bước' "
             "(Retry) hoặc 'Tiếp tục từ Checkpoint' (Resume).",
         )
+        last_agent: LastAgentName = (
+            "perplexity" if context.last_attempted_agent == "perplexity"
+            else ("chatgpt" if context.last_attempted_agent == "chatgpt" else "")
+        )
+        next_agent: AgentName = (
+            "chatgpt" if context.last_attempted_agent == "chatgpt"
+            else "perplexity"
+        )
         context.save_checkpoint(
             TaskCheckpoint(
                 repo=context.current_repo,
@@ -122,8 +130,8 @@ async def run_fsm(
                 loop_count=context.loop_count,
                 max_loops=context.max_loops,
                 auto_mode=context.auto_mode,
-                last_successful_agent=context.last_attempted_agent,
-                next_target_agent=context.last_attempted_agent or "perplexity",
+                last_successful_agent=last_agent,
+                next_target_agent=next_agent,
                 feature_branch=context.feature_branch,
                 commit_sha=context.commit_sha,
                 pr_url=context.pr_url,

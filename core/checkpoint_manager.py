@@ -1,40 +1,74 @@
 import json
+import logging
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from core.config_loader import SelectorsConfig
 from core.tag_protocol import AgentStatus, parse_agent_output
 
+logger = logging.getLogger(__name__)
 
 _REDACTED = "[REDACTED]"
-_SECRET_KEY_PARTS = (
+
+_SECRET_KEYS = {
     "api_key",
     "apikey",
-    "token",
-    "secret",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "client_secret",
     "password",
     "passwd",
+    "secret",
     "cookie",
-    "session",
+    "session_cookie",
     "authorization",
-    "auth",
+    "auth_token",
+}
+
+_SECRET_SUFFIXES = (
+    "_api_key",
+    "_apikey",
+    "_token",
+    "_secret",
+    "_password",
+    "_passwd",
+    "_cookie",
 )
+
+_SECRET_KEY_VALUE_PATTERNS = (
+    re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+"),
+    re.compile(
+        r"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token)"
+        r"\s*[:=]\s*)[^\s,;]+"
+    ),
+    re.compile(r"(?i)((?:cookie|set-cookie)\s*[:=]\s*)[^\r\n]+"),
+)
+
+_SECRET_STANDALONE_PATTERNS = (
+    re.compile(r"(?i)\bsk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"(?i)\bghp_[A-Za-z0-9]{30,}"),
+)
+
+AgentName = Literal["perplexity", "chatgpt", "none"]
+LastAgentName = Literal["", "perplexity", "chatgpt"]
 
 
 class TaskCheckpoint(BaseModel):
     repo: str = ""
     branch: str = "main"
     goal: str = ""
-    loop_count: int = 0
-    max_loops: int = 5
+    loop_count: int = Field(default=0, ge=0)
+    max_loops: int = Field(default=5, ge=1)
     auto_mode: bool = True
-    last_successful_agent: str = ""  # "perplexity" | "chatgpt"
-    next_target_agent: str = "perplexity"  # "perplexity" | "chatgpt"
+    last_successful_agent: LastAgentName = ""
+    next_target_agent: AgentName = "perplexity"
     feature_branch: str = ""
     commit_sha: str = ""
     pr_url: str = ""
@@ -45,14 +79,33 @@ class TaskCheckpoint(BaseModel):
     error_message: str = ""
     timestamp: float = Field(default_factory=time.time)
 
+    @model_validator(mode="after")
+    def validate_loop_bounds(self) -> "TaskCheckpoint":
+        if self.loop_count > self.max_loops:
+            raise ValueError("loop_count không được lớn hơn max_loops")
+        return self
+
 
 def _is_secret_key(key: object) -> bool:
-    normalized = str(key).lower().replace("-", "_")
-    return any(part in normalized for part in _SECRET_KEY_PARTS)
+    normalized = str(key).strip().lower().replace("-", "_").replace(" ", "_")
+    return (
+        normalized in _SECRET_KEYS
+        or normalized.endswith(_SECRET_SUFFIXES)
+        or normalized.startswith("authorization_")
+    )
+
+
+def _redact_string(value: str) -> str:
+    result = value
+    for pattern in _SECRET_KEY_VALUE_PATTERNS:
+        result = pattern.sub(rf"\g<1>{_REDACTED}", result)
+    for pattern in _SECRET_STANDALONE_PATTERNS:
+        result = pattern.sub(_REDACTED, result)
+    return result
 
 
 def redact_secrets(value: Any, key: Optional[str] = None) -> Any:
-    """Recursively remove credential-like values before checkpoint persistence."""
+    """Recursively remove credential-like values and string secrets before checkpoint persistence."""
     if key is not None and _is_secret_key(key):
         return _REDACTED
     if isinstance(value, dict):
@@ -64,6 +117,8 @@ def redact_secrets(value: Any, key: Optional[str] = None) -> Any:
         return [redact_secrets(item) for item in value]
     if isinstance(value, tuple):
         return [redact_secrets(item) for item in value]
+    if isinstance(value, str):
+        return _redact_string(value)
     return value
 
 
@@ -106,8 +161,12 @@ def load_checkpoint(path: str = "storage/checkpoint.json") -> Optional[TaskCheck
     try:
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return TaskCheckpoint(**data)
+        return TaskCheckpoint.model_validate(data)
+    except json.JSONDecodeError:
+        logger.exception("Checkpoint JSON bị hỏng: %s", p)
+        return None
     except Exception:
+        logger.exception("Không thể validate checkpoint: %s", p)
         return None
 
 
@@ -125,6 +184,31 @@ def has_active_checkpoint(path: str = "storage/checkpoint.json") -> bool:
     return cp is not None and bool(cp.repo)
 
 
+async def _read_last_parseable_response(
+    tab: Any,
+    selector: Optional[str],
+    source: str,
+) -> tuple[str, Optional[Any]]:
+    """Reads elements backwards and returns the last element that produces valid parsed agent output."""
+    if not tab or not hasattr(tab, "query_selector_all") or not selector:
+        return "", None
+    try:
+        elements = await tab.query_selector_all(selector)
+        for element in reversed(elements):
+            try:
+                text = (await element.inner_text()).strip()
+            except Exception:
+                continue
+            if not text:
+                continue
+            parsed = parse_agent_output(text, source=source)
+            if parsed is not None and parsed.status != AgentStatus.UNKNOWN:
+                return text, parsed
+    except Exception:
+        pass
+    return "", None
+
+
 async def reconcile_from_tabs(
     p_tab: Any,
     c_tab: Any,
@@ -134,33 +218,17 @@ async def reconcile_from_tabs(
     selectors: SelectorsConfig,
     max_loops: int = 5,
     auto_mode: bool = True,
+    current_loop_count: int = 0,
 ) -> TaskCheckpoint:
     """
     Inspects existing browser tabs (Perplexity & ChatGPT), analyzes their current messages,
     and automatically reconstructs an accurate TaskCheckpoint to resume directly without restarting.
     """
-    p_text = ""
     s_p_resp = selectors.perplexity.get("last_response")
-    if p_tab and hasattr(p_tab, "query_selector_all") and s_p_resp:
-        try:
-            p_els = await p_tab.query_selector_all(s_p_resp)
-            if p_els:
-                p_text = await p_els[-1].inner_text()
-        except Exception:
-            pass
-
-    c_text = ""
     s_c_resp = selectors.chatgpt.get("last_response")
-    if c_tab and hasattr(c_tab, "query_selector_all") and s_c_resp:
-        try:
-            c_els = await c_tab.query_selector_all(s_c_resp)
-            if c_els:
-                c_text = await c_els[-1].inner_text()
-        except Exception:
-            pass
 
-    p_res = parse_agent_output(p_text, source="perplexity") if p_text else None
-    c_res = parse_agent_output(c_text, source="chatgpt") if c_text else None
+    p_text, p_res = await _read_last_parseable_response(p_tab, s_p_resp, source="perplexity")
+    c_text, c_res = await _read_last_parseable_response(c_tab, s_c_resp, source="chatgpt")
 
     try:
         p_lead_template = Path("prompts/perplexity_lead.md").read_text(encoding="utf-8")
@@ -182,7 +250,7 @@ async def reconcile_from_tabs(
                 repo=repo,
                 branch=branch,
                 goal=goal,
-                loop_count=1,
+                loop_count=max(1, current_loop_count),
                 max_loops=max_loops,
                 auto_mode=auto_mode,
                 last_successful_agent="perplexity",
@@ -198,11 +266,12 @@ async def reconcile_from_tabs(
                 f"[BÁO CÁO SỰ CỐ / YÊU CẦU SỬA ĐỔI TỪ LEAD]:\n{p_text}\n"
                 f"Hãy chỉnh sửa mã nguồn và commit cập nhật lên nhánh {feat_branch}."
             )
+            target_loop = max(2, current_loop_count + 1) if current_loop_count > 0 else 2
             return TaskCheckpoint(
                 repo=repo,
                 branch=branch,
                 goal=goal,
-                loop_count=2,
+                loop_count=min(max_loops, target_loop),
                 max_loops=max_loops,
                 auto_mode=auto_mode,
                 last_successful_agent="perplexity",
@@ -224,7 +293,7 @@ async def reconcile_from_tabs(
             repo=repo,
             branch=branch,
             goal=goal,
-            loop_count=1,
+            loop_count=max(1, current_loop_count),
             max_loops=max_loops,
             auto_mode=auto_mode,
             last_successful_agent="chatgpt",
@@ -243,7 +312,7 @@ async def reconcile_from_tabs(
             repo=repo,
             branch=branch,
             goal=goal,
-            loop_count=1,
+            loop_count=max(1, current_loop_count),
             max_loops=max_loops,
             auto_mode=auto_mode,
             last_successful_agent="perplexity",

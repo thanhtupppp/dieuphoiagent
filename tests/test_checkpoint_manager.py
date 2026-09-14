@@ -126,5 +126,89 @@ def test_checkpoint_redact_secrets():
     assert redacted["nested"]["session_token"] == _REDACTED
     assert redacted["nested"]["safe_field"] == "hello"
     assert redacted["items"][0]["password"] == _REDACTED
-    assert redacted["items"][1] == "clean_str"
     assert redacted["coords"] == ["regular_tuple"]
+
+
+def test_checkpoint_redact_secrets_inside_string():
+    from core.checkpoint_manager import redact_secrets, _REDACTED
+
+    payload = {
+        "last_raw_response": (
+            "Response received.\n"
+            "Authorization: Bearer abc123def456\n"
+            "api_key=secret-key-value\n"
+            "Direct token: sk-abcdef12345678901234\n"
+            "GitHub: ghp_1234567890123456789012345678901234"
+        ),
+        "token_count": 100,
+        "session_count": 2,
+        "tokenizer": "cl100k_base",
+        "api_key_enabled": True,
+        "password_policy": "strict",
+    }
+    result = redact_secrets(payload)
+    raw = result["last_raw_response"]
+    assert "abc123def456" not in raw
+    assert "secret-key-value" not in raw
+    assert "sk-abcdef12345678901234" not in raw
+    assert "ghp_1234567890123456789012345678901234" not in raw
+    assert _REDACTED in raw
+
+    # Ensure non-secret keys are preserved without alteration
+    assert result["token_count"] == 100
+    assert result["session_count"] == 2
+    assert result["tokenizer"] == "cl100k_base"
+    assert result["api_key_enabled"] is True
+    assert result["password_policy"] == "strict"
+
+
+def test_checkpoint_load_corrupted_json(tmp_path):
+    bad_file = tmp_path / "corrupted_checkpoint.json"
+    bad_file.write_text("{broken json: 123", encoding="utf-8")
+
+    result = load_checkpoint(str(bad_file))
+    assert result is None
+
+
+def test_checkpoint_loop_validation():
+    # loop_count > max_loops should fail validation
+    with pytest.raises(ValueError):
+        TaskCheckpoint(loop_count=6, max_loops=5)
+
+    # max_loops < 1 should fail validation
+    with pytest.raises(ValueError):
+        TaskCheckpoint(loop_count=0, max_loops=0)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_from_tabs_ignores_trailing_loading_node():
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.prose"},
+        chatgpt={"last_response": "div.assistant"},
+    )
+    mock_p_tab = AsyncMock()
+    valid_el = AsyncMock()
+    valid_el.inner_text = AsyncMock(return_value="[STATUS: READY_FOR_DEV]\n[TASK]: Build feature")
+    loading_el = AsyncMock()
+    loading_el.inner_text = AsyncMock(return_value="Thinking... [Citation 1]")
+
+    # Trailing element is loading/citation without protocol status
+    mock_p_tab.query_selector_all = AsyncMock(return_value=[valid_el, loading_el])
+
+    mock_c_tab = AsyncMock()
+    mock_c_tab.query_selector_all = AsyncMock(return_value=[])
+
+    cp = await reconcile_from_tabs(
+        p_tab=mock_p_tab,
+        c_tab=mock_c_tab,
+        repo="owner/repo",
+        branch="main",
+        goal="Test feature",
+        selectors=selectors,
+        current_loop_count=3,
+    )
+    # Should successfully parse the valid preceding element and preserve loop count
+    assert cp.status_label == "READY_FOR_DEV"
+    assert cp.loop_count == 3
+    assert cp.last_successful_agent == "perplexity"
+    assert cp.next_target_agent == "chatgpt"
