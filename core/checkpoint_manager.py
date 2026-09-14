@@ -414,9 +414,14 @@ async def reconcile_from_tabs(
         payload_repo = getattr(pl, "repo", "") or c_res.tags.get("REPO", "")
         if not payload_repo and pr_url:
             payload_repo = _repo_from_github_url(pr_url)
-        has_commit_evidence = bool(feat_branch and (commit_sha or pr_url))
-        if payload_repo and repo and payload_repo.strip().lower() != repo.strip().lower():
-            has_commit_evidence = False
+        has_commit_evidence = bool(
+            feat_branch
+            and (commit_sha or pr_url)
+            and (
+                not payload_repo
+                or payload_repo.strip().lower() == repo.strip().lower()
+            )
+        )
 
     if c_res and c_res.status == AgentStatus.COMMITTED and has_commit_evidence:
         if p_res and p_res.status == AgentStatus.COMPLETED:

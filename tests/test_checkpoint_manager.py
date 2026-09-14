@@ -634,4 +634,140 @@ def test_repo_from_github_url_invalid():
     assert _repo_from_github_url("https://github.com/single-segment") == ""
 
 
+@pytest.mark.asyncio
+async def test_reconcile_rejects_pr_url_from_other_repo():
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.prose"},
+        chatgpt={"last_response": "div.assistant"},
+    )
+    mock_p_tab = AsyncMock()
+    mock_p_tab.query_selector_all = AsyncMock(return_value=[])
+
+    mock_c_tab = AsyncMock()
+    mock_c_el = AsyncMock()
+    # PR URL points to another repository
+    mock_c_el.inner_text = AsyncMock(return_value="""
+    [STATUS: COMMITTED]
+    [BRANCH: ai-agent/feature-x]
+    [COMMIT_SHA: 9d7e03b]
+    PR_URL: https://github.com/another-org/another-repo/pull/123
+    """)
+    mock_c_tab.query_selector_all = AsyncMock(return_value=[mock_c_el])
+
+    cp = await reconcile_from_tabs(
+        p_tab=mock_p_tab,
+        c_tab=mock_c_tab,
+        repo="my-org/my-project",
+        branch="main",
+        goal="Test feature",
+        selectors=selectors,
+    )
+    # Different repo in pr_url -> commit evidence invalidated -> falls back to IDLE
+    assert cp.status_label == "IDLE"
+    assert cp.loop_count == 0
+    assert cp.next_target_agent == "perplexity"
+
+
+def test_github_repo_parsing_malformed_path():
+    from core.checkpoint_manager import _repo_from_github_url
+
+    assert _repo_from_github_url("https://github.com//") == ""
+    assert _repo_from_github_url("https://github.com/just-owner") == ""
+    assert _repo_from_github_url("https://github.com/owner/repo") == "owner/repo"
+
+
+@pytest.mark.asyncio
+async def test_commit_evidence_empty_sha_and_pr_url():
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.prose"},
+        chatgpt={"last_response": "div.assistant"},
+    )
+    mock_p_tab = AsyncMock()
+    mock_p_tab.query_selector_all = AsyncMock(return_value=[])
+
+    mock_c_tab = AsyncMock()
+    mock_c_el = AsyncMock()
+    # Branch is present, but commit SHA and PR URL are explicitly empty
+    mock_c_el.inner_text = AsyncMock(return_value="""
+    [STATUS: COMMITTED]
+    [BRANCH: feature-branch-only]
+    [COMMIT_SHA: ]
+    PR_URL: 
+    """)
+    mock_c_tab.query_selector_all = AsyncMock(return_value=[mock_c_el])
+
+    cp = await reconcile_from_tabs(
+        p_tab=mock_p_tab,
+        c_tab=mock_c_tab,
+        repo="my-org/my-project",
+        branch="main",
+        goal="Test feature",
+        selectors=selectors,
+    )
+    assert cp.status_label == "IDLE"
+    assert cp.loop_count == 0
+
+
+def test_two_checkpoint_store_instances_concurrency_limitation():
+    # Documents that CheckpointStore locks are instance-specific and do not share mutexes across instances
+    store_a = CheckpointStore()
+    store_b = CheckpointStore()
+    assert store_a._lock is not store_b._lock
+
+
+@pytest.mark.asyncio
+async def test_integration_save_and_restore_needs_revision_checkpoint(tmp_path):
+    store = CheckpointStore()
+    path = str(tmp_path / "integration_cp.json")
+
+    # Simulate reconcile producing a NEEDS_REVISION checkpoint
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.prose"},
+        chatgpt={"last_response": "div.assistant"},
+    )
+    mock_p_tab = AsyncMock()
+    mock_p_el = AsyncMock()
+    mock_p_el.inner_text = AsyncMock(return_value="[STATUS: NEEDS_REVISION]\nFix unit tests.")
+    mock_p_tab.query_selector_all = AsyncMock(return_value=[mock_p_el])
+
+    mock_c_tab = AsyncMock()
+    mock_c_el = AsyncMock()
+    mock_c_el.inner_text = AsyncMock(return_value="""
+    [STATUS: COMMITTED]
+    [BRANCH: ai-agent/feature-integration]
+    [COMMIT_SHA: 1a2b3c4]
+    PR_URL: https://github.com/my-org/my-project/pull/10
+    """)
+    mock_c_tab.query_selector_all = AsyncMock(return_value=[mock_c_el])
+
+    checkpoint = await reconcile_from_tabs(
+        p_tab=mock_p_tab,
+        c_tab=mock_c_tab,
+        repo="my-org/my-project",
+        branch="main",
+        goal="Implement integration test",
+        selectors=selectors,
+        current_loop_count=1,
+        max_loops=5,
+    )
+    assert checkpoint.status_label == "NEEDS_REVISION"
+    assert checkpoint.loop_count == 2
+    assert checkpoint.next_target_agent == "chatgpt"
+
+    # Save via CheckpointStore
+    await store.save(checkpoint, path)
+
+    # Restore and verify fidelity
+    restored = await store.load(path)
+    assert restored is not None
+    assert restored.loop_count == checkpoint.loop_count
+    assert restored.next_target_agent == checkpoint.next_target_agent
+    assert restored.status_label == checkpoint.status_label
+    assert restored.feature_branch == checkpoint.feature_branch
+    assert restored.commit_sha == checkpoint.commit_sha
+    assert restored.pr_url == checkpoint.pr_url
+    assert restored.next_prompt_payload == checkpoint.next_prompt_payload
+
+
+
 
