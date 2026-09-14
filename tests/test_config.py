@@ -168,3 +168,38 @@ def test_load_selectors_fails_fast_on_non_object_json(tmp_path: Path):
 
     with pytest.raises(ValueError, match="Selectors root phải là object"):
         load_selectors(str(bad_json))
+
+
+def test_yaml_alias_and_field_name_conflict(tmp_path: Path):
+    conflict_yaml = tmp_path / "conflict.yaml"
+    conflict_yaml.write_text(
+        "max_loops: 7\ndefault_max_loops: 5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError,
+        match="Không được đồng thời dùng 'max_loops' và 'default_max_loops'",
+    ):
+        load_config(str(conflict_yaml))
+
+
+def test_environment_max_loops_overrides_yaml(tmp_path: Path, monkeypatch):
+    conf_file = tmp_path / "custom.yaml"
+    conf_file.write_text("default_max_loops: 5\n", encoding="utf-8")
+
+    monkeypatch.setenv("DIEUPHOI_MAX_LOOPS", "9")
+    config = load_config(str(conf_file))
+    assert config.max_loops == 9
+
+
+def test_yaml_with_canonical_max_loops(tmp_path: Path):
+    conf_file = tmp_path / "canonical.yaml"
+    conf_file.write_text("max_loops: 8\n", encoding="utf-8")
+
+    config = load_config(str(conf_file))
+    assert config.max_loops == 8
+
+
+def test_invalid_cdp_port_in_url():
+    with pytest.raises(ValidationError, match="cdp_url chứa port không hợp lệ"):
+        AppConfig(cdp_url="http://localhost:nope")

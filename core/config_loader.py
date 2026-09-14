@@ -31,12 +31,17 @@ class AppConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_cdp_url(self) -> "AppConfig":
-        parsed = urlparse(self.cdp_url)
+        try:
+            parsed = urlparse(self.cdp_url)
+            url_port = parsed.port
+        except ValueError as exc:
+            raise ValueError("cdp_url chứa port không hợp lệ") from exc
+
         if parsed.scheme not in {"http", "https"}:
             raise ValueError("cdp_url phải dùng http hoặc https")
         if not parsed.hostname:
             raise ValueError("cdp_url phải có hostname")
-        if parsed.port is not None and parsed.port != self.cdp_port:
+        if url_port is not None and url_port != self.cdp_port:
             raise ValueError("cdp_url và cdp_port không đồng nhất")
         return self
 
@@ -50,7 +55,7 @@ class SelectorsConfig(BaseModel):
 _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "DIEUPHOI_CDP_URL": ("cdp_url", str),
     "DIEUPHOI_CDP_PORT": ("cdp_port", int),
-    "DIEUPHOI_MAX_LOOPS": ("default_max_loops", int),
+    "DIEUPHOI_MAX_LOOPS": ("max_loops", int),
     "DIEUPHOI_TIMEOUT_SECONDS": ("timeout_seconds", int),
     "DIEUPHOI_TEXT_STABILITY_SECONDS": ("text_stability_seconds", float),
     "DIEUPHOI_RECONNECT_ATTEMPTS": ("reconnect_attempts", int),
@@ -64,6 +69,13 @@ _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
 
 def _apply_env_overrides(data: object) -> dict[str, Any]:
     values = dict(data) if isinstance(data, dict) else {}
+    if "default_max_loops" in values:
+        if "max_loops" in values:
+            raise ValueError(
+                "Không được đồng thời dùng 'max_loops' và 'default_max_loops'"
+            )
+        values["max_loops"] = values.pop("default_max_loops")
+
     for env_name, (config_key, value_type) in _ENV_OVERRIDES.items():
         raw_value = os.getenv(env_name)
         if raw_value is None:
@@ -78,8 +90,6 @@ def _apply_env_overrides(data: object) -> dict[str, Any]:
             raise ValueError(
                 f"Invalid value for environment variable {env_name}: {raw_value!r}"
             ) from exc
-    if "default_max_loops" in values and "max_loops" in values:
-        values.pop("max_loops", None)
     return values
 
 
