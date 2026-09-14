@@ -3,7 +3,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core.checkpoint_manager import AgentName, LastAgentName, TaskCheckpoint
+from core.checkpoint_manager import (
+    AgentName,
+    LastAgentName,
+    TaskCheckpoint,
+    _normalize_loop_count,
+)
 from core.fsm.context import FSMState, RunContext
 from core.fsm.states import (
     ApprovalHandler,
@@ -68,6 +73,24 @@ async def run_fsm(
                     "system",
                     f"Đã chạm trần Max Loops ({context.max_loops}). Tạm dừng để người dùng duyệt tay.",
                 )
+                safe_loop, safe_max = _normalize_loop_count(context.loop_count, context.max_loops)
+                context.save_checkpoint(
+                    TaskCheckpoint(
+                        repo=context.current_repo,
+                        branch=context.current_branch,
+                        goal=context.current_goal,
+                        loop_count=safe_loop,
+                        max_loops=safe_max,
+                        auto_mode=context.auto_mode,
+                        last_successful_agent="chatgpt" if context.feature_branch else "perplexity",
+                        next_target_agent="none",
+                        feature_branch=context.feature_branch,
+                        commit_sha=context.commit_sha,
+                        pr_url=context.pr_url,
+                        next_prompt_payload="",
+                        status_label="MAX_LOOPS_REACHED",
+                    )
+                )
                 save_session_record(context, "HALTED")
                 break
 
@@ -91,12 +114,30 @@ async def run_fsm(
         if (
             context.is_running
             and context.loop_count >= context.max_loops
-            and context.state != FSMState.TASK_FINISHED
+            and context.state not in (FSMState.TASK_FINISHED, FSMState.MAX_LOOPS_HALTED)
         ):
             context.set_state(FSMState.MAX_LOOPS_HALTED)
             context.log(
                 "system",
                 f"Đã chạm trần Max Loops ({context.max_loops}). Tạm dừng để người dùng duyệt tay.",
+            )
+            safe_loop, safe_max = _normalize_loop_count(context.loop_count, context.max_loops)
+            context.save_checkpoint(
+                TaskCheckpoint(
+                    repo=context.current_repo,
+                    branch=context.current_branch,
+                    goal=context.current_goal,
+                    loop_count=safe_loop,
+                    max_loops=safe_max,
+                    auto_mode=context.auto_mode,
+                    last_successful_agent="chatgpt" if context.feature_branch else "perplexity",
+                    next_target_agent="none",
+                    feature_branch=context.feature_branch,
+                    commit_sha=context.commit_sha,
+                    pr_url=context.pr_url,
+                    next_prompt_payload="",
+                    status_label="MAX_LOOPS_REACHED",
+                )
             )
             save_session_record(context, "HALTED")
 
@@ -122,13 +163,14 @@ async def run_fsm(
             "chatgpt" if context.last_attempted_agent == "chatgpt"
             else "perplexity"
         )
+        safe_loop, safe_max = _normalize_loop_count(context.loop_count, context.max_loops)
         context.save_checkpoint(
             TaskCheckpoint(
                 repo=context.current_repo,
                 branch=context.current_branch,
                 goal=context.current_goal,
-                loop_count=context.loop_count,
-                max_loops=context.max_loops,
+                loop_count=safe_loop,
+                max_loops=safe_max,
                 auto_mode=context.auto_mode,
                 last_successful_agent=last_agent,
                 next_target_agent=next_agent,
