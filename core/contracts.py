@@ -1,6 +1,7 @@
 import re
 from pathlib import PurePosixPath
 from typing import Literal, Optional
+from urllib.parse import urlparse
 
 from pydantic import (
     BaseModel,
@@ -9,6 +10,27 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+
+def normalize_relative_path(value: str) -> str:
+    """Normalize and validate that a path is a safe relative file path.
+
+    Rejects empty paths, NUL bytes, Windows drive letters, absolute paths,
+    directory traversal ('..'), and root/current directory references ('.').
+    """
+    normalized = value.strip().replace("\\", "/")
+    if not normalized:
+        raise ValueError("path không được rỗng")
+    if "\x00" in normalized:
+        raise ValueError("path không được chứa NUL byte")
+    if re.match(r"^[a-zA-Z]:", normalized):
+        raise ValueError("path phải là relative path an toàn")
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("path phải là relative path an toàn")
+    if normalized in {".", "./"}:
+        raise ValueError("path phải trỏ tới file cụ thể")
+    return normalized
 
 
 class ProtocolModel(BaseModel):
@@ -39,15 +61,7 @@ class FileChange(ProtocolModel):
     @field_validator("path")
     @classmethod
     def validate_path(cls, value: str) -> str:
-        normalized = value.strip().replace("\\", "/")
-        if not normalized:
-            raise ValueError("path không được rỗng")
-        if re.match(r"^[a-zA-Z]:", normalized):
-            raise ValueError("path phải là relative path an toàn")
-        path = PurePosixPath(normalized)
-        if path.is_absolute() or ".." in path.parts:
-            raise ValueError("path phải là relative path an toàn")
-        return normalized
+        return normalize_relative_path(value)
 
     @model_validator(mode="after")
     def validate_payload(self) -> "FileChange":
@@ -62,8 +76,8 @@ class FileChange(ProtocolModel):
 
 class TaskResult(ProtocolModel):
     summary: str = Field(min_length=1, max_length=20_000)
-    files: list[FileChange] = Field(default_factory=list)
-    questions: list[str] = Field(default_factory=list)
+    files: list[FileChange] = Field(default_factory=list, max_length=500)
+    questions: list[str] = Field(default_factory=list, max_length=100)
     branch: str = Field(default="", max_length=255)
     commit_sha: str = Field(default="", max_length=64)
     pr_url: str = Field(default="", max_length=2_000)
@@ -74,6 +88,21 @@ class TaskResult(ProtocolModel):
     def validate_commit_sha(cls, value: str) -> str:
         if value and not re.fullmatch(r"[0-9a-fA-F]{7,64}", value):
             raise ValueError("commit_sha không hợp lệ")
+        return value
+
+    @field_validator("pr_url")
+    @classmethod
+    def validate_pr_url(cls, value: str) -> str:
+        if not value:
+            return value
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("pr_url phải dùng http hoặc https")
+        if parsed.hostname != "github.com":
+            raise ValueError("pr_url phải trỏ tới github.com")
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) < 4 or parts[2] != "pull":
+            raise ValueError("pr_url không phải URL pull request hợp lệ")
         return value
 
     @model_validator(mode="after")
@@ -87,6 +116,14 @@ class TaskResult(ProtocolModel):
 
 
 class ReviewVerdict(ProtocolModel):
+    """Structured review verdict returned by Tech Lead.
+
+    Contract semantics:
+    - `issues`: Blocking issues that prevent approval. Required when approved=False,
+      forbidden when approved=True.
+    - `suggestions`: Non-blocking suggestions/improvements. Allowed regardless of
+      approval status.
+    """
     approved: bool
     issues: list[str] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
@@ -110,15 +147,5 @@ class DevTaskSpec(ProtocolModel):
     @field_validator("affected_files")
     @classmethod
     def validate_affected_files(cls, values: list[str]) -> list[str]:
-        normalized: list[str] = []
-        for value in values:
-            path_str = value.strip().replace("\\", "/")
-            if not path_str:
-                raise ValueError("affected_files không được chứa path rỗng")
-            if re.match(r"^[a-zA-Z]:", path_str):
-                raise ValueError(f"affected_files chứa path không an toàn: {value!r}")
-            path = PurePosixPath(path_str)
-            if path.is_absolute() or ".." in path.parts:
-                raise ValueError(f"affected_files chứa path không an toàn: {value!r}")
-            normalized.append(path_str)
+        normalized = [normalize_relative_path(value) for value in values]
         return list(dict.fromkeys(normalized))

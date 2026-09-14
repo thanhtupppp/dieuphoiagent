@@ -192,6 +192,70 @@ def test_task_result_validate_assignment():
         tr.commit_sha = "invalid!"
 
 
+def test_assignment_revalidates_action():
+    change = FileChange(
+        path="src/a.py",
+        action="create",
+        content="print(1)",
+    )
+    with pytest.raises(ValidationError):
+        change.action = "delete"
+
+
+def test_pr_url_must_be_github_url():
+    # Invalid hostname
+    with pytest.raises(ValidationError, match="pr_url phải trỏ tới github.com"):
+        TaskResult(
+            summary="Done",
+            status="COMMITTED",
+            branch="feature/x",
+            commit_sha="abcdef1",
+            pr_url="https://evil.example/pull/1",
+        )
+
+    # Invalid scheme
+    with pytest.raises(ValidationError, match="pr_url phải dùng http hoặc https"):
+        TaskResult(
+            summary="Done",
+            branch="feature/x",
+            pr_url="ftp://github.com/org/repo/pull/1",
+        )
+
+    # Invalid pull request path format (e.g. issues)
+    with pytest.raises(ValidationError, match="pr_url không phải URL pull request hợp lệ"):
+        TaskResult(
+            summary="Done",
+            branch="feature/x",
+            pr_url="https://github.com/org/repo/issues/1",
+        )
+
+
+def test_path_validation_nul_byte_and_dot():
+    with pytest.raises(ValidationError, match="path không được chứa NUL byte"):
+        FileChange(path="core/bad\x00file.py", action="create", content="x")
+
+    with pytest.raises(ValidationError, match="path phải trỏ tới file cụ thể"):
+        FileChange(path=".", action="create", content="x")
+
+    with pytest.raises(ValidationError, match="path phải trỏ tới file cụ thể"):
+        FileChange(path="./", action="create", content="x")
+
+
+def test_collection_length_limits():
+    # files max_length=500
+    too_many_files = [
+        FileChange(path=f"file_{i}.py", action="create", content="pass")
+        for i in range(501)
+    ]
+    with pytest.raises(ValidationError):
+        TaskResult(summary="Lots of files", files=too_many_files)
+
+    # questions max_length=100
+    too_many_questions = [f"Question {i}?" for i in range(101)]
+    with pytest.raises(ValidationError):
+        TaskResult(summary="Lots of questions", questions=too_many_questions)
+
+
 def test_review_verdict_model():
     rv = ReviewVerdict(
         approved=True,
@@ -257,28 +321,28 @@ def test_dev_task_spec_validation():
         })
 
     # Affected files validation: reject empty path
-    with pytest.raises(ValidationError, match="affected_files không được chứa path rỗng"):
+    with pytest.raises(ValidationError, match="path không được rỗng"):
         DevTaskSpec.model_validate({
             "task": "Test",
             "affected_files": ["core/a.py", "  "],
         })
 
     # Affected files validation: reject traversal
-    with pytest.raises(ValidationError, match="affected_files chứa path không an toàn"):
+    with pytest.raises(ValidationError, match="path phải là relative path an toàn"):
         DevTaskSpec.model_validate({
             "task": "Test",
             "affected_files": ["../secret.env"],
         })
 
     # Affected files validation: reject absolute path
-    with pytest.raises(ValidationError, match="affected_files chứa path không an toàn"):
+    with pytest.raises(ValidationError, match="path phải là relative path an toàn"):
         DevTaskSpec.model_validate({
             "task": "Test",
             "affected_files": ["/etc/hosts"],
         })
 
     # Affected files validation: reject Windows drive letter
-    with pytest.raises(ValidationError, match="affected_files chứa path không an toàn"):
+    with pytest.raises(ValidationError, match="path phải là relative path an toàn"):
         DevTaskSpec.model_validate({
             "task": "Test",
             "affected_files": [r"D:\project\file.py"],
