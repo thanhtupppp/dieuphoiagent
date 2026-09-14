@@ -7,6 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any, Literal, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -257,6 +258,20 @@ async def _read_last_parseable_response(
     return "", None
 
 
+def _repo_from_github_url(url: str) -> str:
+    """Extracts owner/repo from a GitHub URL using urllib.parse."""
+    try:
+        parsed = urlparse(url)
+        if parsed.hostname not in {"github.com", "www.github.com"}:
+            return ""
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) < 2:
+            return ""
+        return f"{parts[0]}/{parts[1]}"
+    except (ValueError, AttributeError):
+        return ""
+
+
 def _checkpoint(
     *,
     repo: str,
@@ -293,6 +308,60 @@ def _checkpoint(
         next_prompt_payload=next_prompt_payload,
         status_label=status_label,
         error_message=error_message,
+    )
+
+
+def _revision_checkpoint(
+    *,
+    repo: str,
+    branch: str,
+    goal: str,
+    auto_mode: bool,
+    completed_loops: int,
+    max_loops: int,
+    feature_branch: str,
+    commit_sha: str,
+    pr_url: str,
+    last_raw_response: str,
+) -> TaskCheckpoint:
+    """Generates revision checkpoint or terminates if max_loops has been reached."""
+    if completed_loops >= max_loops:
+        return _checkpoint(
+            repo=repo,
+            branch=branch,
+            goal=goal,
+            loop_count=max_loops,
+            max_loops=max_loops,
+            auto_mode=auto_mode,
+            last_successful_agent="perplexity",
+            next_target_agent="none",
+            feature_branch=feature_branch,
+            commit_sha=commit_sha,
+            pr_url=pr_url,
+            last_raw_response=last_raw_response,
+            status_label="MAX_LOOPS_REACHED",
+        )
+    next_loop = completed_loops + 1
+    next_payload = (
+        "[BÁO CÁO SỰ CỐ / YÊU CẦU SỬA ĐỔI TỪ LEAD]:\n"
+        f"{last_raw_response}\n"
+        f"Hãy chỉnh sửa mã nguồn và commit cập nhật lên nhánh {feature_branch}."
+    )
+    return _checkpoint(
+        repo=repo,
+        branch=branch,
+        goal=goal,
+        loop_count=next_loop,
+        max_loops=max_loops,
+        auto_mode=auto_mode,
+        last_successful_agent="perplexity",
+        next_target_agent="chatgpt",
+        feature_branch=feature_branch,
+        commit_sha=commit_sha,
+        pr_url=pr_url,
+        last_raw_response=last_raw_response,
+        next_prompt_payload=next_payload,
+        status_label="NEEDS_REVISION",
     )
 
 
@@ -343,11 +412,9 @@ async def reconcile_from_tabs(
         commit_sha = getattr(pl, "commit_sha", "") or c_res.tags.get("COMMIT_SHA", "")
         pr_url = getattr(pl, "pr_url", "") or c_res.tags.get("PR_URL", "")
         payload_repo = getattr(pl, "repo", "") or c_res.tags.get("REPO", "")
-        if not payload_repo and pr_url and "github.com/" in pr_url:
-            parts = pr_url.split("github.com/")[-1].split("/")
-            if len(parts) >= 2:
-                payload_repo = f"{parts[0]}/{parts[1]}"
-        has_commit_evidence = bool(feat_branch or commit_sha or pr_url)
+        if not payload_repo and pr_url:
+            payload_repo = _repo_from_github_url(pr_url)
+        has_commit_evidence = bool(feat_branch and (commit_sha or pr_url))
         if payload_repo and repo and payload_repo.strip().lower() != repo.strip().lower():
             has_commit_evidence = False
 
@@ -369,44 +436,17 @@ async def reconcile_from_tabs(
                 status_label="COMPLETED",
             )
         if p_res and p_res.status == AgentStatus.NEEDS_REVISION:
-            if completed_loops >= safe_max_loops:
-                return _checkpoint(
-                    repo=repo,
-                    branch=branch,
-                    goal=goal,
-                    loop_count=safe_max_loops,
-                    max_loops=safe_max_loops,
-                    auto_mode=auto_mode,
-                    last_successful_agent="perplexity",
-                    next_target_agent="none",
-                    feature_branch=feat_branch,
-                    commit_sha=commit_sha,
-                    pr_url=pr_url,
-                    last_raw_response=p_text,
-                    next_prompt_payload="",
-                    status_label="MAX_LOOPS_REACHED",
-                )
-
-            next_loop_count = min(safe_max_loops, completed_loops + 1)
-            next_payload = (
-                f"[BÁO CÁO SỰ CỐ / YÊU CẦU SỬA ĐỔI TỪ LEAD]:\n{p_text}\n"
-                f"Hãy chỉnh sửa mã nguồn và commit cập nhật lên nhánh {feat_branch}."
-            )
-            return _checkpoint(
+            return _revision_checkpoint(
                 repo=repo,
                 branch=branch,
                 goal=goal,
-                loop_count=next_loop_count,
-                max_loops=safe_max_loops,
                 auto_mode=auto_mode,
-                last_successful_agent="perplexity",
-                next_target_agent="chatgpt",
+                completed_loops=completed_loops,
+                max_loops=safe_max_loops,
                 feature_branch=feat_branch,
                 commit_sha=commit_sha,
                 pr_url=pr_url,
                 last_raw_response=p_text,
-                next_prompt_payload=next_payload,
-                status_label="NEEDS_REVISION",
             )
 
         if completed_loops >= safe_max_loops:
@@ -499,7 +539,7 @@ async def reconcile_from_tabs(
 
 
 class CheckpointStore:
-    """Coroutine-safe checkpoint manager using asyncio.Lock to avoid lost updates."""
+    """Checkpoint manager serialized within a single event loop and instance."""
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()

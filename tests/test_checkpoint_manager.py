@@ -506,3 +506,132 @@ def test_cookie_credential_vs_harmless():
     assert _REDACTED in redacted_sensitive
 
 
+@pytest.mark.asyncio
+async def test_revision_at_last_available_loop():
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.prose"},
+        chatgpt={"last_response": "div.assistant"},
+    )
+    mock_p_tab = AsyncMock()
+    mock_p_el = AsyncMock()
+    mock_p_el.inner_text = AsyncMock(return_value="[STATUS: NEEDS_REVISION]\nFix test.")
+    mock_p_tab.query_selector_all = AsyncMock(return_value=[mock_p_el])
+
+    mock_c_tab = AsyncMock()
+    mock_c_el = AsyncMock()
+    mock_c_el.inner_text = AsyncMock(return_value="""
+    [STATUS: COMMITTED]
+    [BRANCH: ai-agent/feature-x]
+    [COMMIT_SHA: 9d7e03b]
+    PR_URL: https://github.com/owner/repo/pull/8
+    """)
+    mock_c_tab.query_selector_all = AsyncMock(return_value=[mock_c_el])
+
+    # completed_loops = 4, max_loops = 5 -> next_loop = 5 (allowed to run final attempt)
+    cp = await reconcile_from_tabs(
+        p_tab=mock_p_tab,
+        c_tab=mock_c_tab,
+        repo="owner/repo",
+        branch="main",
+        goal="Test feature",
+        selectors=selectors,
+        current_loop_count=4,
+        max_loops=5,
+    )
+    assert cp.loop_count == 5
+    assert cp.max_loops == 5
+    assert cp.status_label == "NEEDS_REVISION"
+    assert cp.next_target_agent == "chatgpt"
+    assert "YÊU CẦU SỬA ĐỔI TỪ LEAD" in cp.next_prompt_payload
+
+
+@pytest.mark.asyncio
+async def test_revision_at_max_loop_is_terminal():
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.prose"},
+        chatgpt={"last_response": "div.assistant"},
+    )
+    mock_p_tab = AsyncMock()
+    mock_p_el = AsyncMock()
+    mock_p_el.inner_text = AsyncMock(return_value="[STATUS: NEEDS_REVISION]\nFix test.")
+    mock_p_tab.query_selector_all = AsyncMock(return_value=[mock_p_el])
+
+    mock_c_tab = AsyncMock()
+    mock_c_el = AsyncMock()
+    mock_c_el.inner_text = AsyncMock(return_value="""
+    [STATUS: COMMITTED]
+    [BRANCH: ai-agent/feature-x]
+    [COMMIT_SHA: 9d7e03b]
+    PR_URL: https://github.com/owner/repo/pull/8
+    """)
+    mock_c_tab.query_selector_all = AsyncMock(return_value=[mock_c_el])
+
+    # completed_loops = 5, max_loops = 5 -> quota exhausted
+    cp = await reconcile_from_tabs(
+        p_tab=mock_p_tab,
+        c_tab=mock_c_tab,
+        repo="owner/repo",
+        branch="main",
+        goal="Test feature",
+        selectors=selectors,
+        current_loop_count=5,
+        max_loops=5,
+    )
+    assert cp.loop_count == 5
+    assert cp.status_label == "MAX_LOOPS_REACHED"
+    assert cp.next_target_agent == "none"
+    assert cp.next_prompt_payload == ""
+
+
+@pytest.mark.asyncio
+async def test_commit_requires_branch_and_sha_or_pr():
+    selectors = SelectorsConfig(
+        perplexity={"last_response": "div.prose"},
+        chatgpt={"last_response": "div.assistant"},
+    )
+    mock_p_tab = AsyncMock()
+    mock_p_tab.query_selector_all = AsyncMock(return_value=[])
+
+    mock_c_tab = AsyncMock()
+    mock_c_el = AsyncMock()
+    # Has branch, but neither commit SHA nor PR URL
+    mock_c_el.inner_text = AsyncMock(return_value="""
+    [STATUS: COMMITTED]
+    [BRANCH: ai-agent/feature-without-sha]
+    """)
+    mock_c_tab.query_selector_all = AsyncMock(return_value=[mock_c_el])
+
+    cp = await reconcile_from_tabs(
+        p_tab=mock_p_tab,
+        c_tab=mock_c_tab,
+        repo="owner/repo",
+        branch="main",
+        goal="Test feature",
+        selectors=selectors,
+    )
+    # Insufficient commit evidence -> falls back to IDLE
+    assert cp.status_label == "IDLE"
+    assert cp.loop_count == 0
+    assert cp.last_successful_agent == ""
+    assert cp.next_target_agent == "perplexity"
+
+
+def test_github_repo_parsing_ignores_query_string():
+    from core.checkpoint_manager import _repo_from_github_url
+
+    url = "https://github.com/my-org/my-project/pull/42?token=secret#diff"
+    assert _repo_from_github_url(url) == "my-org/my-project"
+
+    url_www = "https://www.github.com/user/another-repo/tree/main"
+    assert _repo_from_github_url(url_www) == "user/another-repo"
+
+
+def test_repo_from_github_url_invalid():
+    from core.checkpoint_manager import _repo_from_github_url
+
+    assert _repo_from_github_url("https://gitlab.com/group/proj") == ""
+    assert _repo_from_github_url("invalid-url") == ""
+    assert _repo_from_github_url("https://github.com/single-segment") == ""
+
+
+
