@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -165,9 +166,12 @@ async def test_cdp_connector_close():
     connector.perplexity_tab = MagicMock()
 
     await connector.close()
-    assert connector.is_connected is False
     assert connector.browser is None
+    assert connector.playwright is None
     assert connector.perplexity_tab is None
+    assert connector.chatgpt_tab is None
+    assert connector.is_connected is False
+    assert connector.connected is False
     assert mock_browser.close.called
     assert mock_playwright.stop.called
 
@@ -310,3 +314,43 @@ async def test_cdp_connector_reconnect_success_but_tabs_fail():
     ok = await connector.reconnect()
     assert ok is False
     assert connector.connect.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_cdp_connector_concurrent_connect_lock():
+    """Verify that multiple concurrent connect() calls do not create multiple Playwright instances."""
+    app_config = AppConfig()
+    selectors = SelectorsConfig(perplexity={}, chatgpt={})
+    connector = CDPConnector(app_config, selectors)
+
+    mock_browser = MagicMock()
+    mock_browser.contexts = [MagicMock()]
+    mock_browser.is_connected.return_value = True
+
+    mock_playwright = AsyncMock()
+    mock_playwright.chromium.connect_over_cdp = AsyncMock(return_value=mock_browser)
+
+    start_calls = 0
+
+    async def delayed_start():
+        nonlocal start_calls
+        start_calls += 1
+        await asyncio.sleep(0.02)
+        return mock_playwright
+
+    with patch("core.cdp_connector.async_playwright") as mock_ap:
+        mock_ctx = AsyncMock()
+        mock_ctx.start = AsyncMock(side_effect=delayed_start)
+        mock_ap.return_value = mock_ctx
+
+        # Launch 3 concurrent connect calls
+        results = await asyncio.gather(
+            connector.connect(),
+            connector.connect(),
+            connector.connect(),
+        )
+
+        assert all(results)
+        # Because the lock serializes them and subsequent calls see self.connected == True,
+        # async_playwright().start() must only be invoked once.
+        assert start_calls == 1
