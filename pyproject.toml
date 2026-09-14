@@ -57,7 +57,9 @@ module = ["yaml"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+strict_markers = true
 markers = [
     "live: test chạy CDP trên trình duyệt thật (bỏ qua trong CI)",
+    "asyncio: đánh dấu test coroutine bất đồng bộ",
 ]
 addopts = "-m 'not live'"
