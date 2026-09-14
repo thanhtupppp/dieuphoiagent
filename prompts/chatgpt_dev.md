@@ -25,7 +25,7 @@ Nhiệm vụ của bạn:
   "commit_sha": "<mã_sha_7_ky_tu>",
   "pr_url": "https://github.com/org/repo/pull/xxx",
   "summary": "<Tóm tắt thay đổi>",
-  "files": [{"path": "<đường_dẫn>", "action": "create|update|delete"}]
+  "files": [{"path": "<đường_dẫn>", "action": "create|update|delete", "content": "<nội dung nếu create/update>", "diff": "<hoặc diff nếu update>"}]
 }
 ```
 

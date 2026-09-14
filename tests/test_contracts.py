@@ -1,6 +1,13 @@
+import pytest
+from pydantic import ValidationError
 
 from core.contracts import DevTaskSpec, FileChange, ReviewVerdict, TaskResult
-from core.tag_protocol import parse_agent_output, parse_result, parse_review_verdict, AgentStatus
+from core.tag_protocol import (
+    AgentStatus,
+    parse_agent_output,
+    parse_result,
+    parse_review_verdict,
+)
 
 
 def test_file_change_model():
@@ -10,10 +17,85 @@ def test_file_change_model():
     assert fc.content == "print('hello')"
 
 
+def test_file_change_action_literal():
+    with pytest.raises(ValidationError):
+        FileChange.model_validate({"path": "x.py", "action": "rename", "content": "foo"})
+
+    with pytest.raises(ValidationError):
+        FileChange.model_validate({"path": "x.py", "action": "CREATEE", "content": "foo"})
+
+
+def test_file_change_path_validation():
+    # Valid relative paths
+    fc = FileChange(path="core/auth.py", action="create", content="# code")
+    assert fc.path == "core/auth.py"
+
+    # Backslashes normalized to forward slashes
+    fc_bs = FileChange(path="core\\nested\\file.py", action="create", content="# code")
+    assert fc_bs.path == "core/nested/file.py"
+
+    # Whitespace stripped
+    fc_ws = FileChange(path="  core/app.py  ", action="create", content="# code")
+    assert fc_ws.path == "core/app.py"
+
+    # Reject empty or whitespace-only path
+    with pytest.raises(ValidationError):
+        FileChange.model_validate({"path": "   ", "action": "create", "content": "# code"})
+
+    # Reject absolute POSIX paths
+    with pytest.raises(ValidationError, match="path phải là relative path an toàn"):
+        FileChange.model_validate({"path": "/etc/passwd", "action": "create", "content": "# code"})
+
+    # Reject directory traversal
+    with pytest.raises(ValidationError, match="path phải là relative path an toàn"):
+        FileChange.model_validate({"path": "../../.env", "action": "create", "content": "# code"})
+
+    with pytest.raises(ValidationError, match="path phải là relative path an toàn"):
+        FileChange.model_validate({"path": "core/../../secret.txt", "action": "create", "content": "# code"})
+
+    # Reject Windows drive paths
+    with pytest.raises(ValidationError, match="path phải là relative path an toàn"):
+        FileChange.model_validate({"path": r"C:\project\file.py", "action": "create", "content": "# code"})
+
+    with pytest.raises(ValidationError, match="path phải là relative path an toàn"):
+        FileChange.model_validate({"path": "C:/project/file.py", "action": "create", "content": "# code"})
+
+
+def test_file_change_payload_invariants():
+    # create requires content
+    with pytest.raises(ValidationError, match="action='create' yêu cầu content"):
+        FileChange.model_validate({"path": "new.py", "action": "create", "content": None})
+
+    # create with empty string is allowed (e.g. empty __init__.py)
+    fc_empty = FileChange(path="__init__.py", action="create", content="")
+    assert fc_empty.content == ""
+
+    # update requires content or diff
+    with pytest.raises(ValidationError, match="action='update' yêu cầu content hoặc diff"):
+        FileChange.model_validate({"path": "up.py", "action": "update", "content": None, "diff": None})
+
+    fc_up_content = FileChange(path="up.py", action="update", content="new_content")
+    assert fc_up_content.content == "new_content"
+
+    fc_up_diff = FileChange(path="up.py", action="update", diff="@@ -1 +1 @@")
+    assert fc_up_diff.diff == "@@ -1 +1 @@"
+
+    # delete must not have content or diff
+    with pytest.raises(ValidationError, match="action='delete' không được có content/diff"):
+        FileChange.model_validate({"path": "del.py", "action": "delete", "content": "not allowed"})
+
+    with pytest.raises(ValidationError, match="action='delete' không được có content/diff"):
+        FileChange.model_validate({"path": "del.py", "action": "delete", "diff": "@@ -1 +0,0 @@"})
+
+    fc_del = FileChange(path="del.py", action="delete")
+    assert fc_del.content is None
+    assert fc_del.diff is None
+
+
 def test_task_result_model():
     tr = TaskResult(
         summary="Updated auth flow",
-        files=[FileChange(path="core/auth.py", action="update")],
+        files=[FileChange(path="core/auth.py", action="update", diff="@@ -1,3 +1,4 @@")],
         questions=["Do we need MFA?"],
         branch="feat/auth",
         commit_sha="abcdef1",
@@ -25,6 +107,89 @@ def test_task_result_model():
     assert tr.branch == "feat/auth"
     assert tr.commit_sha == "abcdef1"
     assert tr.pr_url == "https://github.com/test/repo/pull/5"
+
+
+def test_task_result_committed_invariants():
+    # COMMITTED without branch -> fails
+    with pytest.raises(ValidationError, match="COMMITTED yêu cầu branch"):
+        TaskResult.model_validate({
+            "summary": "Done",
+            "status": "COMMITTED",
+            "branch": "",
+            "commit_sha": "abcdef1",
+        })
+
+    # COMMITTED with branch, but without commit_sha and pr_url -> fails
+    with pytest.raises(ValidationError, match="COMMITTED yêu cầu commit_sha hoặc pr_url"):
+        TaskResult.model_validate({
+            "summary": "Done",
+            "status": "COMMITTED",
+            "branch": "feat/xyz",
+            "commit_sha": "",
+            "pr_url": "",
+        })
+
+    # COMMITTED with branch and commit_sha -> valid
+    tr1 = TaskResult.model_validate({
+        "summary": "Done",
+        "status": "COMMITTED",
+        "branch": "feat/xyz",
+        "commit_sha": "abcdef12345",
+    })
+    assert tr1.status == "COMMITTED"
+    assert tr1.branch == "feat/xyz"
+
+    # COMMITTED with branch and pr_url -> valid
+    tr2 = TaskResult.model_validate({
+        "summary": "Done",
+        "status": "COMMITTED",
+        "branch": "feat/xyz",
+        "pr_url": "https://github.com/org/repo/pull/1",
+    })
+    assert tr2.status == "COMMITTED"
+
+    # Non-COMMITTED status does not require branch or commit_sha
+    tr3 = TaskResult.model_validate({
+        "summary": "Work in progress",
+        "status": "READY_FOR_DEV",
+    })
+    assert tr3.status == "READY_FOR_DEV"
+
+
+def test_task_result_commit_sha_format():
+    # Valid 7-char sha
+    tr = TaskResult(summary="Test", commit_sha="abcdef1")
+    assert tr.commit_sha == "abcdef1"
+
+    # Valid 40-char sha
+    tr40 = TaskResult(summary="Test", commit_sha="a" * 40)
+    assert tr40.commit_sha == "a" * 40
+
+    # Invalid sha: too short (less than 7 chars)
+    with pytest.raises(ValidationError, match="commit_sha không hợp lệ"):
+        TaskResult.model_validate({"summary": "Test", "commit_sha": "abc123"})
+
+    # Invalid sha: non-hex characters
+    with pytest.raises(ValidationError, match="commit_sha không hợp lệ"):
+        TaskResult.model_validate({"summary": "Test", "commit_sha": "zzzzzzz"})
+
+
+def test_task_result_extra_forbid_and_whitespace():
+    # Extra field is forbidden
+    with pytest.raises(ValidationError):
+        TaskResult.model_validate({"summary": "Test", "unknown_field": "val"})
+
+    # Whitespace is stripped
+    tr = TaskResult(summary="  Test with spaces  ", branch="  feat/branch  ")
+    assert tr.summary == "Test with spaces"
+    assert tr.branch == "feat/branch"
+
+
+def test_task_result_validate_assignment():
+    tr = TaskResult(summary="Test", branch="feat/ok")
+    # Mutating to an invalid commit_sha triggers validation_assignment
+    with pytest.raises(ValidationError):
+        tr.commit_sha = "invalid!"
 
 
 def test_review_verdict_model():
@@ -39,6 +204,33 @@ def test_review_verdict_model():
     assert rv.summary == "LGTM"
 
 
+def test_review_verdict_invariants():
+    # Not approved must have at least one issue
+    with pytest.raises(ValidationError, match="Review không approved phải có ít nhất một issue"):
+        ReviewVerdict.model_validate({
+            "approved": False,
+            "issues": [],
+            "summary": "Failed",
+        })
+
+    # Approved must not have issues
+    with pytest.raises(ValidationError, match="Review approved không nên còn issue"):
+        ReviewVerdict.model_validate({
+            "approved": True,
+            "issues": ["Unresolved critical bug"],
+            "summary": "Approved anyway",
+        })
+
+    # Valid rejected
+    rv_rej = ReviewVerdict(approved=False, issues=["Missing tests"])
+    assert rv_rej.approved is False
+    assert rv_rej.issues == ["Missing tests"]
+
+    # Valid approved
+    rv_app = ReviewVerdict(approved=True, issues=[])
+    assert rv_app.approved is True
+
+
 def test_dev_task_spec_model():
     spec = DevTaskSpec(
         task="Refactor database layer",
@@ -48,6 +240,56 @@ def test_dev_task_spec_model():
     assert spec.version == "1.0"
     assert spec.task == "Refactor database layer"
     assert spec.affected_files == ["core/db.py"]
+
+
+def test_dev_task_spec_validation():
+    # Version must be "1.0"
+    with pytest.raises(ValidationError):
+        DevTaskSpec.model_validate({
+            "version": "2.0",
+            "task": "Do something",
+        })
+
+    # Task cannot be empty
+    with pytest.raises(ValidationError):
+        DevTaskSpec.model_validate({
+            "task": "",
+        })
+
+    # Affected files validation: reject empty path
+    with pytest.raises(ValidationError, match="affected_files không được chứa path rỗng"):
+        DevTaskSpec.model_validate({
+            "task": "Test",
+            "affected_files": ["core/a.py", "  "],
+        })
+
+    # Affected files validation: reject traversal
+    with pytest.raises(ValidationError, match="affected_files chứa path không an toàn"):
+        DevTaskSpec.model_validate({
+            "task": "Test",
+            "affected_files": ["../secret.env"],
+        })
+
+    # Affected files validation: reject absolute path
+    with pytest.raises(ValidationError, match="affected_files chứa path không an toàn"):
+        DevTaskSpec.model_validate({
+            "task": "Test",
+            "affected_files": ["/etc/hosts"],
+        })
+
+    # Affected files validation: reject Windows drive letter
+    with pytest.raises(ValidationError, match="affected_files chứa path không an toàn"):
+        DevTaskSpec.model_validate({
+            "task": "Test",
+            "affected_files": [r"D:\project\file.py"],
+        })
+
+    # Deduplication and normalization
+    spec = DevTaskSpec(
+        task="Clean up modules",
+        affected_files=["core\\auth.py", "core/db.py", "core/auth.py"],
+    )
+    assert spec.affected_files == ["core/auth.py", "core/db.py"]
 
 
 def test_parse_result_valid_json():
@@ -154,7 +396,7 @@ def test_parse_agent_output_with_json_task_result():
       "branch": "ai-agent/endpoint",
       "commit_sha": "deadbeef",
       "pr_url": "https://github.com/org/repo/pull/99",
-      "files": [{"path": "api.py", "action": "create"}]
+      "files": [{"path": "api.py", "action": "create", "content": "# api endpoint code"}]
     }
     ```
     """
