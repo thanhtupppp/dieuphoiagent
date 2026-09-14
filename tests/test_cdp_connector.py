@@ -226,3 +226,87 @@ def test_cdp_connector_find_page_aliases():
 
     not_found = CDPConnector._find_page([p1, p2], "claude.ai")
     assert not_found is None
+
+
+@pytest.mark.asyncio
+async def test_cdp_connector_connect_already_connected_no_new_session():
+    app_config = AppConfig()
+    selectors = SelectorsConfig(perplexity={}, chatgpt={})
+    connector = CDPConnector(app_config, selectors)
+
+    mock_browser = MagicMock()
+    mock_browser.is_connected.return_value = True
+    connector.browser = mock_browser
+    connector.is_connected = True
+
+    with patch("core.cdp_connector.async_playwright") as mock_ap:
+        ok = await connector.connect()
+        assert ok is True
+        assert not mock_ap.called
+
+
+@pytest.mark.asyncio
+async def test_cdp_connector_find_tabs_page_url_exception():
+    app_config = AppConfig()
+    selectors = SelectorsConfig(
+        perplexity={"url_match": "perplexity.ai"},
+        chatgpt={"url_match": "chatgpt.com"},
+    )
+    connector = CDPConnector(app_config, selectors)
+
+    # Page 1 raises exception when accessing url property
+    mock_p1 = MagicMock()
+    mock_p1.is_closed.return_value = False
+    type(mock_p1).url = property(lambda self: (_ for _ in ()).throw(RuntimeError("Target page destroyed")))
+
+    # Page 2 has valid perplexity url
+    mock_p2 = MagicMock()
+    mock_p2.is_closed.return_value = False
+    mock_p2.url = "https://www.perplexity.ai"
+
+    mock_context = MagicMock()
+    mock_context.pages = [mock_p1, mock_p2]
+    mock_browser = MagicMock()
+    mock_browser.contexts = [mock_context]
+    mock_browser.is_connected.return_value = True
+
+    connector.browser = mock_browser
+    connector.is_connected = True
+    connector._open_page = AsyncMock(return_value=None)
+
+    p_tab, c_tab = await connector.find_tabs()
+    assert p_tab == mock_p2
+    assert c_tab is None
+
+
+@pytest.mark.asyncio
+async def test_cdp_connector_open_page_goto_and_close_both_fail():
+    app_config = AppConfig(navigation_timeout_ms=100)
+    selectors = SelectorsConfig(perplexity={}, chatgpt={})
+    connector = CDPConnector(app_config, selectors)
+
+    mock_page = MagicMock()
+    mock_page.goto = AsyncMock(side_effect=PlaywrightTimeoutError("timeout"))
+    mock_page.is_closed.return_value = False
+    mock_page.close = AsyncMock(side_effect=RuntimeError("Connection lost while closing"))
+
+    mock_context = MagicMock()
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+
+    res = await connector._open_page(mock_context, "https://test.com")
+    assert res is None
+    assert mock_page.close.called
+
+
+@pytest.mark.asyncio
+async def test_cdp_connector_reconnect_success_but_tabs_fail():
+    app_config = AppConfig(reconnect_attempts=2, reconnect_delay_seconds=0.01)
+    selectors = SelectorsConfig(perplexity={}, chatgpt={})
+    connector = CDPConnector(app_config, selectors)
+
+    connector.connect = AsyncMock(return_value=True)
+    connector.find_tabs = AsyncMock(return_value=(None, None))
+
+    ok = await connector.reconnect()
+    assert ok is False
+    assert connector.connect.call_count == 2
