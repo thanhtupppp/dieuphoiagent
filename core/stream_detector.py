@@ -334,32 +334,50 @@ class StreamDetector:
         elif hasattr(page, "fill"):
             await page.fill(s_input, text)
 
-        await asyncio.sleep(0.5)
-
+        # Wait up to 3 seconds for send button to be enabled (vital for large payloads with attachment tiles)
         submitted = False
-        if hasattr(page, "query_selector") and s_send:
-            try:
-                btn = await page.query_selector(s_send)
-                if btn:
-                    is_vis = True
-                    if hasattr(btn, "is_visible"):
-                        vis_val = btn.is_visible()
-                        is_vis = bool(await vis_val if asyncio.iscoroutine(vis_val) else vis_val)
-                    if is_vis:
-                        is_disabled = False
-                        if hasattr(btn, "is_disabled") and callable(btn.is_disabled):
-                            try:
-                                dis_val = btn.is_disabled()
-                                dis_res = await dis_val if asyncio.iscoroutine(dis_val) else dis_val
-                                if isinstance(dis_res, bool):
-                                    is_disabled = dis_res
-                            except Exception:
-                                pass
-                        if not is_disabled and hasattr(btn, "click"):
-                            await btn.click(force=True, timeout=5000)
-                            submitted = True
-            except Exception:
-                pass
+        for _ in range(6):
+            await asyncio.sleep(0.5)
+            if hasattr(page, "query_selector") and s_send:
+                try:
+                    btn = await page.query_selector(s_send)
+                    if btn:
+                        is_vis = True
+                        if hasattr(btn, "is_visible"):
+                            vis_val = btn.is_visible()
+                            is_vis = bool(await vis_val if asyncio.iscoroutine(vis_val) else vis_val)
+                        if is_vis:
+                            is_disabled = False
+                            if hasattr(btn, "is_disabled") and callable(btn.is_disabled):
+                                try:
+                                    dis_val = btn.is_disabled()
+                                    dis_res = await dis_val if asyncio.iscoroutine(dis_val) else dis_val
+                                    if isinstance(dis_res, bool):
+                                        is_disabled = dis_res
+                                except Exception:
+                                    pass
+                            if not is_disabled and hasattr(btn, "click"):
+                                await btn.click(force=True, timeout=5000)
+                                submitted = True
+                                break
+                except Exception:
+                    pass
+
+            if not submitted and hasattr(page, "evaluate") and s_send:
+                try:
+                    clicked = await page.evaluate("""(selector) => {
+                        const btn = document.querySelector(selector);
+                        if (btn && !btn.disabled) {
+                            btn.click();
+                            return true;
+                        }
+                        return false;
+                    }""", s_send)
+                    if clicked:
+                        submitted = True
+                        break
+                except Exception:
+                    pass
 
         if not submitted and hasattr(page, "keyboard"):
             await page.keyboard.press("Enter")
@@ -376,6 +394,7 @@ class StreamDetector:
         s_resp = s_cfg.get("last_response")
         s_tool = s_cfg.get("tool_running_indicator")
         s_action = s_cfg.get("action_buttons")
+        s_send = s_cfg.get("send_button")
 
         start_time = time.time()
         timeout = self.config.timeout_seconds
@@ -389,7 +408,7 @@ class StreamDetector:
         # --- PHASE 1: Wait for generation to start (if baseline is provided) ---
         generation_started = baseline is None
         phase1_start = time.time()
-        phase1_timeout = 15.0
+        phase1_timeout = 30.0
         retriggered_enter = False
 
         while not generation_started and (time.time() - phase1_start < phase1_timeout):
@@ -418,7 +437,15 @@ class StreamDetector:
             if not retriggered_enter and (now - phase1_start >= 5.0):
                 retriggered_enter = True
                 if on_progress:
-                    on_progress(f"Chưa thấy phản hồi, thử gửi lại tín hiệu Enter vào {agent_type.capitalize()}...")
+                    on_progress(f"Chưa thấy phản hồi, thử gửi lại lệnh vào {agent_type.capitalize()}...")
+                if hasattr(page, "evaluate") and s_send:
+                    try:
+                        await page.evaluate("""(sel) => {
+                            const b = document.querySelector(sel);
+                            if (b && !b.disabled) b.click();
+                        }""", s_send)
+                    except Exception:
+                        pass
                 if hasattr(page, "keyboard"):
                     try:
                         await page.keyboard.press("Enter")
@@ -427,6 +454,9 @@ class StreamDetector:
 
             if on_progress and int(now - phase1_start) > 0 and int(now - phase1_start) % 4 == 0:
                 on_progress(f"Đang chờ {agent_type.capitalize()} tiếp nhận yêu cầu... ({elapsed_p1}s)")
+
+        if not generation_started:
+            raise TimeoutError(f"{agent_type.capitalize()} chưa bắt đầu phản hồi sau {int(phase1_timeout)}s.")
 
         # --- PHASE 2: Wait for generation to complete ---
         last_text = ""

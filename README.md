@@ -7,12 +7,12 @@ Hệ thống điều phối đa Agent giữa **Perplexity (Comet)** và **ChatGP
 ## 🌟 Tính Năng Nổi Bật
 
 - **Gắn kết CDP không phụ thuộc API trả phí:** Kết nối trực tiếp vào phiên trình duyệt Comet/Chrome (cổng 9222) qua Chrome DevTools Protocol, tận dụng phiên đăng nhập và các plugin có sẵn mà không lo Cloudflare/bot detection.
-- **Phân vai rõ ràng:** 
+- **Phân vai rõ ràng:**
   - **Perplexity (Tab 1):** Tech Lead & Reviewer (nghiên cứu tài liệu mới, lập đặc tả kỹ thuật `[TASK_SPEC]`, nghiệm thu code).
   - **ChatGPT (Tab 2):** Core Dev & Git Operator (viết code, gọi GitHub Action/Plugin commit vào nhánh `ai-agent/`, mở PR).
 - **Giao thức thẻ [TAG] linh hoạt:** Bóc tách dữ liệu chuẩn xác bằng Regex có hỗ trợ markdown code block và heuristic fallback cho link PR / commit SHA.
 - **Bộ nhận diện hoàn tất Streaming 3 lớp:** Kiểm tra nút Stop, tiến trình chạy Tool của ChatGPT và độ ổn định văn bản trong 2.5s.
-- **2 chế độ vận hành:** Chạy tự động (*Auto-pilot*) hoặc Duyệt từng bước (*Step-by-step*) với Dialog cho phép người dùng can thiệp sửa prompt trước khi chuyển tab.
+- **2 chế độ vận hành:** Chạy tự động (_Auto-pilot_) hoặc Duyệt từng bước (_Step-by-step_) với Dialog cho phép người dùng can thiệp sửa prompt trước khi chuyển tab.
 - **An toàn tuyệt đối:** Ràng buộc tiền tố branch `ai-agent/`, trần vòng lặp `Max Loops` và nút ngắt khẩn cấp.
 
 ---
@@ -20,7 +20,9 @@ Hệ thống điều phối đa Agent giữa **Perplexity (Comet)** và **ChatGP
 ## 🚀 Hướng Dẫn Cài Đặt & Sử Dụng
 
 ### 1. Cài đặt môi trường
+
 Khởi tạo môi trường ảo và cài đặt thư viện:
+
 ```bash
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
@@ -28,22 +30,31 @@ python -m venv .venv
 ```
 
 ### 2. Khởi động trình duyệt Comet/Chrome với cổng CDP
+
 Chạy file script khởi động:
+
 ```cmd
-scripts\launch_comet.bat
+.\scripts\launch_comet.bat
+.\scripts\launch_chrome.bat
+
 ```
-*(Đăng nhập Perplexity và ChatGPT trên 2 tab nếu đây là lần đầu chạy profile)*.
+
+_(Đăng nhập Perplexity và ChatGPT trên 2 tab nếu đây là lần đầu chạy profile)_.
 
 ### 3. Kiểm tra kết nối trình duyệt
+
 Chạy script kiểm tra nhanh cổng 9222:
+
 ```bash
 .venv\Scripts\python scripts\test_cdp.py
 ```
 
 ### 4. Khởi chạy giao diện điều khiển NiceGUI
+
 ```bash
 .venv\Scripts\python run.py
 ```
+
 Mở trình duyệt truy cập: `http://localhost:8080`
 
 ---
