@@ -511,14 +511,14 @@ class StreamDetector:
                 if stable_start is None:
                     stable_start = now
 
-            sig_dom_quiet = bool(
+            sig_dom_quiet = (
                 dom_quiet_event.is_set()
                 or (stable_start is not None and (now - stable_start) >= stability_duration)
             )
             sig_button_ready = bool(
                 not is_tool_running and ((not stop_visible and current_text != "") or has_action_buttons)
             )
-            sig_protocol = bool(is_terminal)
+            sig_protocol = is_terminal
 
             signals_met = sum([sig_dom_quiet, sig_button_ready, sig_protocol])
 
