@@ -10,7 +10,7 @@ from core.orchestrator_fsm import FSMState, OrchestratorFSM
 
 @pytest.mark.asyncio
 async def test_fsm_error_triggers_recovery_required(tmp_path):
-    config = AppConfig(default_max_loops=3)
+    config = AppConfig(max_loops=3)
     selectors = SelectorsConfig(
         perplexity={"input_textarea": "t", "send_button": "b", "last_response": "div"},
         chatgpt={"prompt_textarea": "t", "send_button": "b", "last_response": "div"},
@@ -32,7 +32,7 @@ async def test_fsm_error_triggers_recovery_required(tmp_path):
 
 @pytest.mark.asyncio
 async def test_fsm_resume_from_checkpoint(tmp_path):
-    config = AppConfig(default_max_loops=3)
+    config = AppConfig(max_loops=3)
     selectors = SelectorsConfig(
         perplexity={"input_textarea": "t", "send_button": "b", "last_response": "div"},
         chatgpt={"prompt_textarea": "t", "send_button": "b", "last_response": "div"},

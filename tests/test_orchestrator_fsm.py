@@ -91,7 +91,7 @@ async def test_fsm_runs_task_via_provider():
         """,
     )
     fsm = OrchestratorFSM(
-        AppConfig(default_max_loops=3),
+        AppConfig(max_loops=3),
         SelectorsConfig(perplexity={}, chatgpt={}),
         provider=provider,
     )
@@ -136,7 +136,7 @@ async def test_fsm_two_turn_loop_with_provider():
     ]
 
     fsm = OrchestratorFSM(
-        AppConfig(default_max_loops=3),
+        AppConfig(max_loops=3),
         SelectorsConfig(perplexity={}, chatgpt={}),
         provider=provider,
     )

@@ -85,7 +85,7 @@ def test_load_selectors():
 
 
 def test_alias_is_normalized():
-    config = AppConfig(default_max_loops=7)
+    config = AppConfig.model_validate({"default_max_loops": 7})
     assert config.max_loops == 7
 
 
@@ -98,16 +98,16 @@ def test_app_config_populate_by_name():
     cfg1 = AppConfig(max_loops=10)
     assert cfg1.max_loops == 10
 
-    cfg2 = AppConfig(default_max_loops=10)
+    cfg2 = AppConfig.model_validate({"default_max_loops": 10})
     assert cfg2.max_loops == 10
 
 
 def test_app_config_extra_forbid():
     with pytest.raises(ValidationError):
-        AppConfig(unexpected_field="disallowed")
+        AppConfig.model_validate({"unexpected_field": "disallowed"})
 
     with pytest.raises(ValidationError):
-        SelectorsConfig(perplexity={}, chatgpt={}, extra_service={})
+        SelectorsConfig.model_validate({"perplexity": {}, "chatgpt": {}, "extra_service": {}})
 
 
 def test_cdp_url_and_port_validation():
@@ -138,34 +138,34 @@ def test_cdp_url_and_port_validation():
 
 def test_app_config_range_constraints():
     with pytest.raises(ValidationError):
-        AppConfig(cdp_port=0)
+        AppConfig.model_validate({"cdp_port": 0})
 
     with pytest.raises(ValidationError):
-        AppConfig(cdp_port=70000)
+        AppConfig.model_validate({"cdp_port": 70000})
 
     with pytest.raises(ValidationError):
-        AppConfig(max_loops=0)
+        AppConfig.model_validate({"max_loops": 0})
 
     with pytest.raises(ValidationError):
-        AppConfig(timeout_seconds=0)
+        AppConfig.model_validate({"timeout_seconds": 0})
 
     with pytest.raises(ValidationError):
-        AppConfig(text_stability_seconds=0.0)
+        AppConfig.model_validate({"text_stability_seconds": 0.0})
 
     with pytest.raises(ValidationError):
-        AppConfig(text_stability_seconds=-1.0)
+        AppConfig.model_validate({"text_stability_seconds": -1.0})
 
     with pytest.raises(ValidationError):
-        AppConfig(reconnect_attempts=0)
+        AppConfig.model_validate({"reconnect_attempts": 0})
 
     with pytest.raises(ValidationError):
-        AppConfig(reconnect_delay_seconds=-0.5)
+        AppConfig.model_validate({"reconnect_delay_seconds": -0.5})
 
     with pytest.raises(ValidationError):
-        AppConfig(connect_timeout_ms=0)
+        AppConfig.model_validate({"connect_timeout_ms": 0})
 
     with pytest.raises(ValidationError):
-        AppConfig(navigation_timeout_ms=0)
+        AppConfig.model_validate({"navigation_timeout_ms": 0})
 
 
 def test_load_config_fails_fast_on_non_mapping_yaml(tmp_path: Path):

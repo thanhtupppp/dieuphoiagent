@@ -6,7 +6,7 @@ from core.config_loader import AppConfig, SelectorsConfig
 
 @pytest.mark.asyncio
 async def test_fsm_e2e_dry_run_completion():
-    config = AppConfig(default_max_loops=3)
+    config = AppConfig(max_loops=3)
     selectors = SelectorsConfig(
         perplexity={"input_textarea": "t", "send_button": "b", "last_response": "div"},
         chatgpt={"prompt_textarea": "t", "send_button": "b", "last_response": "div"}
