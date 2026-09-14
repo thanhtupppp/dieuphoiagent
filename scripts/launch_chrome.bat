@@ -4,22 +4,20 @@ setlocal enabledelayedexpansion
 for %%I in ("%~dp0..\browser_profile") do set "PROFILE_DIR=%%~fI"
 
 set "BROWSER_BIN="
-if exist "%LOCALAPPDATA%\Perplexity\Comet\Application\comet.exe" (
-    set "BROWSER_BIN=%LOCALAPPDATA%\Perplexity\Comet\Application\comet.exe"
-) else if exist "C:\Program Files\Google\Chrome\Application\chrome.exe" (
+if exist "C:\Program Files\Google\Chrome\Application\chrome.exe" (
     set "BROWSER_BIN=C:\Program Files\Google\Chrome\Application\chrome.exe"
 ) else if exist "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" (
     set "BROWSER_BIN=C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
 ) else if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" (
     set "BROWSER_BIN=%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"
-) else if exist "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" (
-    set "BROWSER_BIN=C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+) else if exist "%LOCALAPPDATA%\Perplexity\Comet\Application\comet.exe" (
+    set "BROWSER_BIN=%LOCALAPPDATA%\Perplexity\Comet\Application\comet.exe"
 ) else (
     set "BROWSER_BIN=chrome.exe"
 )
 
 echo ========================================================
-echo Khoi chay Comet voi Remote Debugging Port 9222...
+echo Khoi chay Google Chrome voi Remote Debugging Port 9222...
 echo Trinh duyet: "!BROWSER_BIN!"
 echo Thu muc Profile: "!PROFILE_DIR!"
 echo ========================================================
