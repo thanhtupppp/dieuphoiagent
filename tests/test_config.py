@@ -105,13 +105,17 @@ def test_cdp_url_and_port_validation():
     cfg = AppConfig(cdp_url="http://remote.host:9555", cdp_port=9555)
     assert cfg.cdp_port == 9555
 
-    # Valid: url without port uses cdp_port
-    cfg_no_port = AppConfig(cdp_url="http://remote.host", cdp_port=9222)
-    assert cfg_no_port.cdp_port == 9222
+    # Invalid: url without port is rejected
+    with pytest.raises(ValidationError, match="cdp_url phải chỉ rõ port"):
+        AppConfig(cdp_url="http://remote.host", cdp_port=9222)
 
     # Invalid: mismatched ports
     with pytest.raises(ValidationError, match="cdp_url và cdp_port không đồng nhất"):
         AppConfig(cdp_url="http://localhost:9333", cdp_port=9222)
+
+    # Invalid: credentials in url
+    with pytest.raises(ValidationError, match="cdp_url không được chứa username/password"):
+        AppConfig(cdp_url="http://user:password@localhost:9222")
 
     # Invalid: bad scheme
     with pytest.raises(ValidationError, match="cdp_url phải dùng http hoặc https"):

@@ -4,7 +4,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
 class AppConfig(BaseModel):
@@ -17,7 +17,7 @@ class AppConfig(BaseModel):
     cdp_port: int = Field(default=9222, ge=1, le=65535)
     max_loops: int = Field(
         default=5,
-        alias="default_max_loops",
+        validation_alias=AliasChoices("max_loops", "default_max_loops"),
         ge=1,
     )
     timeout_seconds: int = Field(default=600, ge=1)
@@ -41,7 +41,11 @@ class AppConfig(BaseModel):
             raise ValueError("cdp_url phải dùng http hoặc https")
         if not parsed.hostname:
             raise ValueError("cdp_url phải có hostname")
-        if url_port is not None and url_port != self.cdp_port:
+        if parsed.username or parsed.password:
+            raise ValueError("cdp_url không được chứa username/password")
+        if url_port is None:
+            raise ValueError("cdp_url phải chỉ rõ port để khớp với cdp_port")
+        if url_port != self.cdp_port:
             raise ValueError("cdp_url và cdp_port không đồng nhất")
         return self
 
@@ -86,7 +90,7 @@ def _apply_env_overrides(data: object) -> dict[str, Any]:
             continue
         try:
             values[config_key] = value_type(normalized)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise ValueError(
                 f"Invalid value for environment variable {env_name}: {raw_value!r}"
             ) from exc
