@@ -7,8 +7,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from core.config_loader import load_config, load_selectors
-from core.cdp_connector import CDPConnector
+from core.config_loader import load_config, load_selectors  # noqa: E402
+from core.cdp_connector import CDPConnector  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,6 +40,7 @@ async def run_smoke_test() -> bool:
     assert p_tab_1 is p_tab_2, "Tab Perplexity bị tạo mới thay vì tái sử dụng!"
     assert c_tab_1 is c_tab_2, "Tab ChatGPT bị tạo mới thay vì tái sử dụng!"
 
+    assert connector.browser is not None, "browser không được là None"
     context = connector.browser.contexts[0]
     pages = [p for p in context.pages if not p.is_closed()]
     perplexity_count = sum("perplexity.ai" in p.url for p in pages)
@@ -56,8 +57,8 @@ async def run_smoke_test() -> bool:
     assert connector.playwright is None, "playwright phải là None sau close()"
     assert connector.perplexity_tab is None, "perplexity_tab phải là None sau close()"
     assert connector.chatgpt_tab is None, "chatgpt_tab phải là None sau close()"
-    assert connector.is_connected is False, "is_connected phải là False sau close()"
-    assert connector.connected is False, "connected phải là False sau close()"
+    assert not connector.is_connected, "is_connected phải là False sau close()"
+    assert not connector.connected, "connected phải là False sau close()"
     logger.info("-> Toàn bộ tham chiếu đã được dọn sạch an toàn sau close()!")
 
     logger.info("=== BƯỚC 5: Kiểm tra kết nối lại sau close() ===")

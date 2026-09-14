@@ -47,21 +47,21 @@ def test_cdp_connector_connected_property():
     connector = CDPConnector(app_config, selectors)
 
     # Initial: False
-    assert connector.connected is False
+    assert not connector.connected
 
     # is_connected True but browser None
     connector.is_connected = True
-    assert connector.connected is False
+    assert not connector.connected
 
     # Browser connected
     mock_browser = MagicMock()
     mock_browser.is_connected.return_value = True
     connector.browser = mock_browser
-    assert connector.connected is True
+    assert connector.connected
 
     # Browser throws
     mock_browser.is_connected.side_effect = Exception("error")
-    assert connector.connected is False
+    assert not connector.connected
 
 
 @pytest.mark.asyncio
@@ -170,8 +170,8 @@ async def test_cdp_connector_close():
     assert connector.playwright is None
     assert connector.perplexity_tab is None
     assert connector.chatgpt_tab is None
-    assert connector.is_connected is False
-    assert connector.connected is False
+    assert not connector.is_connected
+    assert not connector.connected
     assert mock_browser.close.called
     assert mock_playwright.stop.called
 
@@ -207,11 +207,11 @@ def test_cdp_connector_handle_browser_disconnected():
     # Disconnected event from a different (stale) browser instance should be ignored
     stale_browser = MagicMock()
     connector._handle_browser_disconnected(stale_browser)
-    assert connector.is_connected is True
+    assert connector.is_connected
 
     # Disconnected event matching current browser resets state
     connector._handle_browser_disconnected(mock_browser)
-    assert connector.is_connected is False
+    assert not connector.is_connected
     assert connector.perplexity_tab is None
 
 
