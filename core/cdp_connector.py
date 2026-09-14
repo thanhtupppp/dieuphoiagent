@@ -3,6 +3,7 @@ import logging
 from typing import Optional, Tuple
 from playwright.async_api import (
     Browser,
+    BrowserContext,
     Page,
     Playwright,
     TimeoutError as PlaywrightTimeoutError,
@@ -158,17 +159,18 @@ class CDPConnector:
                 continue
         return None
 
-    async def _open_page(self, context, url: str) -> Optional[Page]:
+    async def _open_page(self, context: BrowserContext, url: str) -> Optional[Page]:
         page: Optional[Page] = None
         timeout = getattr(self.config, "navigation_timeout_ms", 30_000)
         try:
             page = await context.new_page()
-            await page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=timeout,
-            )
-            return page
+            if page is not None:
+                await page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=timeout,
+                )
+                return page
         except PlaywrightTimeoutError:
             logger.warning("Timeout khi mở trang: %s", url)
         except Exception:
