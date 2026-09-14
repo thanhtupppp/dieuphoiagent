@@ -73,11 +73,13 @@ _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
 
 def _apply_env_overrides(data: object) -> dict[str, Any]:
     values = dict(data) if isinstance(data, dict) else {}
-    if "default_max_loops" in values:
-        if "max_loops" in values:
-            raise ValueError(
-                "Không được đồng thời dùng 'max_loops' và 'default_max_loops'"
-            )
+    has_old_alias = "default_max_loops" in values
+    has_new_name = "max_loops" in values
+    if has_old_alias and has_new_name:
+        raise ValueError(
+            "Không được đồng thời dùng 'max_loops' và 'default_max_loops'"
+        )
+    if has_old_alias:
         values["max_loops"] = values.pop("default_max_loops")
 
     for env_name, (config_key, value_type) in _ENV_OVERRIDES.items():

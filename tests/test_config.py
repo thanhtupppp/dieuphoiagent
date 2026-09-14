@@ -84,6 +84,16 @@ def test_load_selectors():
     assert "stop_button" in selectors.chatgpt
 
 
+def test_alias_is_normalized():
+    config = AppConfig(default_max_loops=7)
+    assert config.max_loops == 7
+
+
+def test_field_name_is_supported():
+    config = AppConfig(max_loops=8)
+    assert config.max_loops == 8
+
+
 def test_app_config_populate_by_name():
     cfg1 = AppConfig(max_loops=10)
     assert cfg1.max_loops == 10
@@ -187,7 +197,43 @@ def test_yaml_alias_and_field_name_conflict(tmp_path: Path):
         load_config(str(conflict_yaml))
 
 
+def test_alias_conflict_is_rejected(tmp_path: Path):
+    conflict_yaml = tmp_path / "conflict.yaml"
+    conflict_yaml.write_text(
+        "max_loops: 5\ndefault_max_loops: 7\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError,
+        match="Không được đồng thời dùng 'max_loops' và 'default_max_loops'",
+    ):
+        load_config(str(conflict_yaml))
+
+
+def test_alias_conflict_not_masked_by_environment(tmp_path: Path, monkeypatch):
+    conflict_yaml = tmp_path / "conflict.yaml"
+    conflict_yaml.write_text(
+        "max_loops: 5\ndefault_max_loops: 7\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DIEUPHOI_MAX_LOOPS", "10")
+    with pytest.raises(
+        ValueError,
+        match="Không được đồng thời dùng 'max_loops' và 'default_max_loops'",
+    ):
+        load_config(str(conflict_yaml))
+
+
 def test_environment_max_loops_overrides_yaml(tmp_path: Path, monkeypatch):
+    conf_file = tmp_path / "custom.yaml"
+    conf_file.write_text("default_max_loops: 5\n", encoding="utf-8")
+
+    monkeypatch.setenv("DIEUPHOI_MAX_LOOPS", "9")
+    config = load_config(str(conf_file))
+    assert config.max_loops == 9
+
+
+def test_environment_overrides_yaml(monkeypatch, tmp_path: Path):
     conf_file = tmp_path / "custom.yaml"
     conf_file.write_text("default_max_loops: 5\n", encoding="utf-8")
 
@@ -207,3 +253,37 @@ def test_yaml_with_canonical_max_loops(tmp_path: Path):
 def test_invalid_cdp_port_in_url():
     with pytest.raises(ValidationError, match="cdp_url chứa port không hợp lệ"):
         AppConfig(cdp_url="http://localhost:nope")
+
+
+def test_invalid_cdp_port_is_rejected():
+    with pytest.raises(ValidationError, match="cdp_url chứa port không hợp lệ"):
+        AppConfig(cdp_url="http://localhost:not-a-port")
+
+
+def test_cdp_url_with_credentials_is_rejected():
+    with pytest.raises(ValidationError, match="cdp_url không được chứa username/password"):
+        AppConfig(cdp_url="http://user:password@localhost:9222")
+
+
+def test_cdp_url_without_port_is_rejected():
+    with pytest.raises(ValidationError, match="cdp_url phải chỉ rõ port"):
+        AppConfig(cdp_url="http://localhost", cdp_port=9222)
+
+
+def test_environment_override_catches_type_error(monkeypatch):
+    import core.config_loader
+
+    def bad_converter(v: str) -> int:
+        raise TypeError("Simulated converter TypeError")
+
+    monkeypatch.setitem(
+        core.config_loader._ENV_OVERRIDES,
+        "DIEUPHOI_TEST_CUSTOM",
+        ("custom_key", bad_converter),
+    )
+    monkeypatch.setenv("DIEUPHOI_TEST_CUSTOM", "bad_value")
+    with pytest.raises(
+        ValueError,
+        match="Invalid value for environment variable DIEUPHOI_TEST_CUSTOM",
+    ):
+        core.config_loader._apply_env_overrides({})
