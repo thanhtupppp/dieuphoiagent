@@ -106,3 +106,25 @@ async def test_reconcile_from_tabs_perplexity_needs_revision():
     assert cp.next_target_agent == "chatgpt"
     assert cp.feature_branch == "ai-agent/feature-x"
     assert "YÊU CẦU SỬA ĐỔI TỪ LEAD" in cp.next_prompt_payload
+
+
+def test_checkpoint_redact_secrets():
+    from core.checkpoint_manager import redact_secrets, _REDACTED
+
+    sample = {
+        "repo": "owner/repo",
+        "api_key": "secret_123",
+        "nested": {
+            "session_token": "token_abc",
+            "safe_field": "hello",
+        },
+        "items": [{"password": "pwd"}, "clean_str"],
+        "coords": ("regular_tuple",),
+    }
+    redacted = redact_secrets(sample)
+    assert redacted["api_key"] == _REDACTED
+    assert redacted["nested"]["session_token"] == _REDACTED
+    assert redacted["nested"]["safe_field"] == "hello"
+    assert redacted["items"][0]["password"] == _REDACTED
+    assert redacted["items"][1] == "clean_str"
+    assert redacted["coords"] == ["regular_tuple"]
